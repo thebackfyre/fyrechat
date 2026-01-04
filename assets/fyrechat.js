@@ -398,6 +398,15 @@ async function loadThirdPartyEmotes(cfg) {
     );
   }
 
+if (providers.ffz?.enabled)
+ tasks.push(
+  loadFFZ(cfg).catch((e) => {
+    console.warn("FFZ load failed:", e)
+      })
+    );
+  }
+
+
   // NOTE: FFZ is implemented below, but we are NOT calling it yet.
   // Next step (after you confirm this replacement compiles):
   // if (providers.ffz?.enabled) tasks.push(loadFFZ(cfg).catch(...));
