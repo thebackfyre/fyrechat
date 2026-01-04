@@ -605,94 +605,56 @@
   }
 
   function renderTextWith3PEmotes(rawText) {
-  // Always escape first
-  const escaped = escapeHtml(rawText);
-
   // If 3P emotes not enabled/ready, return escaped as-is
   const cfg = STATE.cfg;
-  if (!cfg?.emotes?.enabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
-
-  // Split while keeping whitespace tokens
-  const tokens = escaped.split(/(\s+)/);
-
-  // Characters we treat as "wrappers" around emotes.
-  // These should be preserved, but not block matching.
-  const WRAP_LEFT  = new Set(["(", "[", "{", "<", '"', "'"]);
-  const WRAP_RIGHT = new Set([")", "]", "}", ">", '"', "'"]);
-
-  // Characters we treat as "trailing punctuation" that should also be preserved.
-  // (We don't treat these as wrappers because they can stack: "!!!", "...,", etc.)
-  const TRAIL_PUNCT = /[!?.,:;~]+$/;
-
-  function peelToken(tok) {
-    // tok is already HTML-escaped (so < and > appear as &lt; and &gt;)
-    // We'll handle both raw wrappers and escaped wrappers.
-    // In escaped text, angle brackets become:
-    //   "<" => "&lt;" and ">" => "&gt;"
-    // so we treat those sequences as wrappers too.
-    const LEFT_SEQ = ["(", "[", "{", "&lt;", '"', "&#039;"];
-    const RIGHT_SEQ = [")", "]", "}", "&gt;", '"', "&#039;"];
-
-    let left = "";
-    let right = "";
-    let core = tok;
-
-    // 1) Peel trailing punctuation like "!!!" or "...,"
-    let punct = "";
-    const pm = core.match(TRAIL_PUNCT);
-    if (pm) {
-      punct = pm[0];
-      core = core.slice(0, -punct.length);
-    }
-
-    // 2) Repeatedly peel wrapper pairs from both ends.
-    // This handles <emote>, <<emote>>, ( [ { < " ' etc.
-    // We do it in a loop until nothing changes.
-    let changed = true;
-    while (changed && core.length) {
-      changed = false;
-
-      // Peel left wrapper
-      for (const seq of LEFT_SEQ) {
-        if (core.startsWith(seq)) {
-          left += seq;
-          core = core.slice(seq.length);
-          changed = true;
-          break;
-        }
-      }
-
-      // Peel right wrapper
-      for (const seq of RIGHT_SEQ) {
-        if (core.endsWith(seq)) {
-          right = seq + right;
-          core = core.slice(0, -seq.length);
-          changed = true;
-          break;
-        }
-      }
-    }
-
-    // Re-append trailing punctuation to the "right side"
-    right = right + punct;
-
-    return { left, core, right };
+  if (!cfg?.emotes?.enabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) {
+    return escapeHtml(rawText);
   }
 
-  const out = tokens.map((tok) => {
-    if (!tok || /^\s+$/.test(tok)) return tok;
+  const text = String(rawText ?? "");
+  const parts = [];
+  let i = 0;
 
-    const { left, core, right } = peelToken(tok);
-    if (!core) return tok;
+  // Define what counts as an emote "word" character.
+  // Most 3P codes are A-Z a-z 0-9 underscore.
+  function isWordChar(ch) {
+    const c = ch.charCodeAt(0);
+    return (
+      (c >= 48 && c <= 57) ||   // 0-9
+      (c >= 65 && c <= 90) ||   // A-Z
+      (c >= 97 && c <= 122) ||  // a-z
+      ch === "_"
+    );
+  }
 
-    const em = STATE.emoteMap3P.get(core);
-    if (!em) return tok;
+  while (i < text.length) {
+    const ch = text[i];
 
-    return `${left}<img class="emote" alt="" src="${escapeAttr(em.url)}">${right}`;
-  });
+    // Read a "word token"
+    if (isWordChar(ch)) {
+      const start = i;
+      i++;
+      while (i < text.length && isWordChar(text[i])) i++;
+      const token = text.slice(start, i);
 
-  return out.join("");
+      const em = STATE.emoteMap3P.get(token);
+      if (em?.url) {
+        parts.push(`<img class="emote" alt="" src="${escapeAttr(em.url)}">`);
+      } else {
+        parts.push(escapeHtml(token));
+      }
+      continue;
+    }
+
+    // Non-word characters (spaces, punctuation, < >, quotes, emojis, etc.)
+    // Emit as escaped text so it's safe, but preserved exactly.
+    parts.push(escapeHtml(ch));
+    i++;
+  }
+
+  return parts.join("");
 }
+
 
 
   function escapeAttr(str) {
