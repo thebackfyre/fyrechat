@@ -50,7 +50,10 @@
     if (!patch || typeof patch !== "object") return out;
 
     for (const [k, v] of Object.entries(patch)) {
-      if (v && typeof v === "object" && !Array.isArray(v) && typeof out[k] === "object" && out[k] && !Array.isArray(out[k])) {
+      if (
+        v && typeof v === "object" && !Array.isArray(v) &&
+        typeof out[k] === "object" && out[k] && !Array.isArray(out[k])
+      ) {
         out[k] = deepMerge(out[k], v);
       } else {
         out[k] = v;
@@ -69,17 +72,13 @@
   const $debug = $("#debug");
   const $stack = $("#stack");
 
-  // Ensure debug banner exists (your HTML has it)
-  if ($debug) {
-    $debug.style.display = "none";
-  }
+  if ($debug) $debug.style.display = "none";
 
   // ----------------------------
   // Config loading
   // ----------------------------
   const params = new URLSearchParams(location.search);
 
-  // URI overrides (these win over default config)
   function uriConfigPatch() {
     const patch = {};
 
@@ -92,7 +91,6 @@
     if (params.has("demo")) patch.demo = parseBool(params.get("demo"), false);
     if (params.has("demoBadges")) patch.demoBadges = parseBool(params.get("demoBadges"), false);
 
-    // Optional feature toggles via URI
     if (params.has("badges")) patch.badges = { enabled: parseBool(params.get("badges"), true) };
     if (params.has("emotes")) patch.emotes = { enabled: parseBool(params.get("emotes"), true) };
 
@@ -102,7 +100,6 @@
   }
 
   async function loadDefaultConfig() {
-    // IMPORTANT: build URL relative to *this page*, not repo root
     const url = new URL("./assets/config/fyrechat.default.json", location.href).toString();
 
     try {
@@ -119,40 +116,65 @@
   // ----------------------------
   // Badge system
   // ----------------------------
-  // We build a map: badgeSets[set][version] = image_url_1x (or 2x)
-  // Sources:
-  // - global badge sets
-  // - channel badge sets (needs broadcaster userId)
   const badgeState = {
     enabled: true,
     proxyBase: "",
-    globalSets: null,   // { badge_sets: { set: { versions: { ... } } } }
-    channelSets: null,
     mergedLookup: null, // { set: { version: url } }
     channelId: null,
     lastError: null
   };
 
+  /**
+   * Supports TWO shapes:
+   * A) legacy badges.twitch.tv:
+   *    { badge_sets: { setName: { versions: { "1": {image_url_1x...} } } } }
+   *
+   * B) Helix-style:
+   *    { data: [ { set_id: "moderator", versions: [ { id:"1", image_url_1x... } ] } ] }
+   *
+   * Returns lookup:
+   *    lookup[setName][version] = bestImageUrl
+   */
   function normalizeBadgeSets(apiResponse) {
-    // Twitch badges API response shape:
-    // { badge_sets: { broadcaster: { versions: { "1": { image_url_1x... }}}}}
     if (!apiResponse || typeof apiResponse !== "object") return null;
-    const root = apiResponse.badge_sets || apiResponse.badgeSets || null;
-    if (!root || typeof root !== "object") return null;
 
-    const lookup = {};
-    for (const [setName, setObj] of Object.entries(root)) {
-      const versions = setObj && setObj.versions ? setObj.versions : null;
-      if (!versions || typeof versions !== "object") continue;
+    // Shape A
+    const badgeSetsObj = apiResponse.badge_sets || apiResponse.badgeSets;
+    if (badgeSetsObj && typeof badgeSetsObj === "object" && !Array.isArray(badgeSetsObj)) {
+      const lookup = {};
+      for (const [setName, setObj] of Object.entries(badgeSetsObj)) {
+        const versions = setObj?.versions;
+        if (!versions || typeof versions !== "object") continue;
 
-      lookup[setName] = {};
-      for (const [ver, info] of Object.entries(versions)) {
-        // Prefer 2x if you want sharper badges; 1x is fine too.
-        const url = info.image_url_2x || info.image_url_1x || info.image_url_4x || "";
-        if (url) lookup[setName][ver] = url;
+        lookup[setName] = {};
+        for (const [ver, info] of Object.entries(versions)) {
+          const url = info?.image_url_2x || info?.image_url_1x || info?.image_url_4x || "";
+          if (url) lookup[setName][ver] = url;
+        }
       }
+      return Object.keys(lookup).length ? lookup : null;
     }
-    return lookup;
+
+    // Shape B
+    const dataArr = apiResponse.data;
+    if (Array.isArray(dataArr)) {
+      const lookup = {};
+      for (const set of dataArr) {
+        const setName = set?.set_id;
+        const versions = set?.versions;
+        if (!setName || !Array.isArray(versions)) continue;
+
+        lookup[setName] = {};
+        for (const v of versions) {
+          const ver = v?.id;
+          const url = v?.image_url_2x || v?.image_url_1x || v?.image_url_4x || "";
+          if (ver && url) lookup[setName][String(ver)] = url;
+        }
+      }
+      return Object.keys(lookup).length ? lookup : null;
+    }
+
+    return null;
   }
 
   async function fetchJson(url) {
@@ -162,7 +184,6 @@
   }
 
   async function resolveChannelIdViaProxy(proxyBase, channelLogin) {
-    // Robust: try multiple endpoints in case your worker differs
     const tries = [
       `${proxyBase}/id/${encodeURIComponent(channelLogin)}`,
       `${proxyBase}/id?login=${encodeURIComponent(channelLogin)}`,
@@ -176,20 +197,14 @@
         if (!res.ok) continue;
 
         const txt = await res.text();
-        // Could be plain "79615025"
         const asNum = txt.trim().match(/^\d+$/) ? txt.trim() : null;
         if (asNum) return asNum;
 
         const j = safeJsonParse(txt);
         if (j) {
-          // Could be {id:"79615025"} or {data:{id:"..."}} etc
           const candidates = [
-            j.id,
-            j.user_id,
-            j.userId,
-            j.data?.id,
-            j.data?.user_id,
-            j.data?.userId
+            j.id, j.user_id, j.userId,
+            j.data?.id, j.data?.user_id, j.data?.userId
           ].filter(Boolean);
           for (const c of candidates) {
             const s = String(c).trim();
@@ -204,8 +219,6 @@
   }
 
   async function loadBadgesIfEnabled(cfg) {
-    // cfg.badgeProxy is your worker domain (required)
-    // cfg.badges.enabled optional, defaults true if badgeProxy exists
     badgeState.proxyBase = (cfg.badgeProxy || "").replace(/\/+$/, "");
     badgeState.enabled = cfg.badges?.enabled ?? true;
 
@@ -219,20 +232,18 @@
     }
 
     try {
-      // 1) Global sets
-      const globalUrl = `${badgeState.proxyBase}/badges/global`;
-      const globalJson = await fetchJson(globalUrl);
+      // 1) Global
+      const globalJson = await fetchJson(`${badgeState.proxyBase}/badges/global`);
       const globalLookup = normalizeBadgeSets(globalJson);
-      if (!globalLookup) throw new Error("global badge_sets missing");
+      if (!globalLookup) throw new Error("global badge sets missing/unsupported shape");
 
-      // 2) Channel sets (requires channel ID)
+      // 2) Channel
       let channelLookup = {};
       const channelId = await resolveChannelIdViaProxy(badgeState.proxyBase, cfg.channel);
       badgeState.channelId = channelId;
 
       if (channelId) {
-        const channelUrl = `${badgeState.proxyBase}/badges/channels/${channelId}`;
-        const channelJson = await fetchJson(channelUrl);
+        const channelJson = await fetchJson(`${badgeState.proxyBase}/badges/channels/${channelId}`);
         const chLookup = normalizeBadgeSets(channelJson);
         if (chLookup) channelLookup = chLookup;
       }
@@ -241,7 +252,7 @@
       badgeState.mergedLookup = deepMerge(globalLookup, channelLookup);
       badgeState.lastError = null;
 
-      return { ok: true, channelId: badgeState.channelId, sets: badgeState.mergedLookup };
+      return { ok: true, channelId: badgeState.channelId };
     } catch (e) {
       badgeState.lastError = String(e?.message || e);
       badgeState.mergedLookup = null;
@@ -250,7 +261,6 @@
   }
 
   function badgeUrlsFromTag(badgesTag) {
-    // badgesTag example: "moderator/1,subscriber/6"
     if (!badgesTag || badgesTag === "(none)") return [];
 
     const lookup = badgeState.mergedLookup;
@@ -279,7 +289,6 @@
       "7tv": { enabled: true, baseUrl: "https://api.7tv.app/v3" }
     },
     channel: "",
-    // Map: emoteName -> imageUrl
     map: new Map()
   };
 
@@ -297,12 +306,7 @@
     try { localStorage.setItem(key, JSON.stringify(obj)); } catch {}
   }
 
-  async function fetchBTTVChannelEmotes(channelLogin) {
-    // BTTV channel endpoint needs Twitch user id normally.
-    // Many setups use the legacy endpoint requiring userId, but that’s extra complexity.
-    // We’ll use a public lookup through decapi ONLY if you want later.
-    // For now: keep it simple: use BTTV "shared + global" via their global endpoint + channel endpoint if we can get ID.
-    // If you already built a worker for id, we can reuse it to hit BTTV channel endpoint.
+  async function fetchBTTVChannelEmotes() {
     const out = [];
 
     // Global
@@ -313,9 +317,9 @@
       }
     } catch {}
 
-    // Channel (needs userId)
+    // Channel (needs Twitch userId)
     try {
-      const channelId = badgeState.channelId; // we already resolve it for badges
+      const channelId = badgeState.channelId;
       if (!channelId) return out;
       const c = await fetchJson(`https://api.betterttv.net/3/cached/users/twitch/${channelId}`);
       const all = []
@@ -329,13 +333,8 @@
     return out;
   }
 
-  async function fetch7TVEmotes(channelLogin, baseUrl) {
-    // 7TV “users” lookup requires Twitch userId typically, but we’ll try a login lookup pattern:
-    // Best practice: use the 7TV user-by-platform endpoint:
-    // GET /users/twitch/<twitchUserId>
-    // We’ll reuse the resolved channelId (Twitch user id).
+  async function fetch7TVEmotes(baseUrl) {
     const out = [];
-
     try {
       const channelId = badgeState.channelId;
       if (!channelId) return out;
@@ -343,26 +342,23 @@
       const url = `${baseUrl.replace(/\/+$/, "")}/users/twitch/${channelId}`;
       const data = await fetchJson(url);
 
-      const set = data?.emote_set;
-      const emotes = set?.emotes || [];
+      const emotes = data?.emote_set?.emotes || [];
       for (const item of emotes) {
         const name = item?.name;
         const host = item?.data?.host;
         const files = host?.files || [];
-        // choose a sensible 1x file
         const f = files.find(x => x?.name === "1x.webp") || files.find(x => x?.name?.includes("1x")) || files[0];
         if (!name || !host?.url || !f?.name) continue;
         const imgUrl = `https:${host.url}/${f.name}`;
         out.push({ name, url: imgUrl });
       }
     } catch {}
-
     return out;
   }
 
   async function load3pEmotesIfEnabled(cfg) {
     emoteState.enabled = cfg.emotes?.enabled ?? true;
-    emoteState.cacheMinutes = clampInt(cfg.emotes?.cacheMinutes, 360, 1, 24 * 60 * 24);
+    emoteState.cacheMinutes = clampInt(cfg.emotes?.cacheMinutes, 360, 1, 365 * 24 * 60);
     emoteState.providers = deepMerge(emoteState.providers, cfg.emotes?.providers || {});
     emoteState.channel = cfg.channel;
 
@@ -373,7 +369,6 @@
     const cacheKey = `fyrechat:3pEmotes:${cfg.channel}`;
     const now = Date.now();
 
-    // Cache format: { ts, entries: [ [name,url], ... ] }
     const cached = loadEmoteCache(cacheKey);
     if (cached && cached.ts && Array.isArray(cached.entries)) {
       const ageMs = now - cached.ts;
@@ -386,49 +381,34 @@
       }
     }
 
-    // Fresh load
-    const entries = [];
-
     if (emoteState.providers?.bttv?.enabled) {
-      const bttv = await fetchBTTVChannelEmotes(cfg.channel);
-      for (const e of bttv) {
-        if (e?.name && e?.url) {
-          emoteState.map.set(e.name, e.url);
-        }
-      }
+      const bttv = await fetchBTTVChannelEmotes();
+      for (const e of bttv) if (e?.name && e?.url) emoteState.map.set(e.name, e.url);
     }
 
     if (emoteState.providers?.["7tv"]?.enabled) {
       const baseUrl = emoteState.providers["7tv"]?.baseUrl || "https://api.7tv.app/v3";
-      const seven = await fetch7TVEmotes(cfg.channel, baseUrl);
-      for (const e of seven) {
-        if (e?.name && e?.url) {
-          emoteState.map.set(e.name, e.url);
-        }
-      }
+      const seven = await fetch7TVEmotes(baseUrl);
+      for (const e of seven) if (e?.name && e?.url) emoteState.map.set(e.name, e.url);
     }
 
+    const entries = [];
     for (const [name, url] of emoteState.map.entries()) entries.push([name, url]);
     saveEmoteCache(cacheKey, { ts: now, entries });
 
     return { ok: true, count: emoteState.map.size, cached: false };
   }
 
-  // Replace plain-text tokens with <img> for 3rd party emotes
   function apply3pEmotesToHtmlParts(htmlParts) {
     if (!emoteState.enabled || emoteState.map.size === 0) return htmlParts;
 
-    // htmlParts is already escaped + contains Twitch <img class="emote">
-    // We'll only replace in text segments (not inside existing tags)
     const out = [];
-
     for (const part of htmlParts) {
       if (part.includes("<img")) {
         out.push(part);
         continue;
       }
 
-      // part is plain escaped text. Split by spaces, keep separators.
       const tokens = part.split(/(\s+)/);
       for (const t of tokens) {
         if (!t || t.trim() === "") {
@@ -436,18 +416,15 @@
           continue;
         }
         const url = emoteState.map.get(t);
-        if (url) {
-          out.push(`<img class="emote" alt="" src="${url}">`);
-        } else {
-          out.push(t);
-        }
+        if (url) out.push(`<img class="emote" alt="" src="${url}">`);
+        else out.push(t);
       }
     }
     return out;
   }
 
   // ----------------------------
-  // Twitch IRC parsing (tags, emotes, badges)
+  // Twitch IRC parsing
   // ----------------------------
   function parseTags(raw) {
     const out = {};
@@ -458,38 +435,6 @@
       out[k] = v;
     }
     return out;
-  }
-
-  function parsePrivmsg(line) {
-    let tags = {};
-    let rest = line;
-
-    if (rest.startsWith("@")) {
-      const spaceIdx = rest.indexOf(" ");
-      const rawTags = rest.slice(1, spaceIdx);
-      tags = parseTags(rawTags);
-      rest = rest.slice(spaceIdx + 1);
-    }
-
-    const msgIdx = rest.indexOf(" :");
-    if (msgIdx === -1) return null;
-
-    const text = rest.slice(msgIdx + 2);
-
-    const name = tags["display-name"] || "Unknown";
-    const color = tags["color"] || "#ffffff";
-    const emotes = tags["emotes"] || "";
-    const badges = tags["badges"] || "(none)";
-
-    // Twitch emotes are positional ranges -> build html parts
-    let htmlParts = buildTwitchMessageHtmlParts(text, emotes);
-
-    // 3P emotes: swap tokens in the remaining text pieces
-    htmlParts = apply3pEmotesToHtmlParts(htmlParts);
-
-    const badgeImgs = badgeUrlsFromTag(badges);
-
-    return { name, color, htmlParts, badgeImgs };
   }
 
   function buildTwitchMessageHtmlParts(text, emotesTag) {
@@ -521,6 +466,35 @@
     return parts;
   }
 
+  function parsePrivmsg(line) {
+    let tags = {};
+    let rest = line;
+
+    if (rest.startsWith("@")) {
+      const spaceIdx = rest.indexOf(" ");
+      const rawTags = rest.slice(1, spaceIdx);
+      tags = parseTags(rawTags);
+      rest = rest.slice(spaceIdx + 1);
+    }
+
+    const msgIdx = rest.indexOf(" :");
+    if (msgIdx === -1) return null;
+
+    const text = rest.slice(msgIdx + 2);
+
+    const name = tags["display-name"] || "Unknown";
+    const color = tags["color"] || "#ffffff";
+    const emotes = tags["emotes"] || "";
+    const badges = tags["badges"] || "(none)";
+
+    let htmlParts = buildTwitchMessageHtmlParts(text, emotes);
+    htmlParts = apply3pEmotesToHtmlParts(htmlParts);
+
+    const badgeImgs = badgeUrlsFromTag(badges);
+
+    return { name, color, htmlParts, badgeImgs };
+  }
+
   // ----------------------------
   // Rendering
   // ----------------------------
@@ -537,10 +511,8 @@
   function ensureThemeLink(cfg) {
     const themeLink = document.getElementById("themeLink");
     if (!themeLink) return;
-
     if (!cfg.theme) return;
 
-    // Expect theme file: ./assets/themes/<theme>.css
     const href = new URL(`./assets/themes/${cfg.theme}.css`, location.href).toString();
     themeLink.setAttribute("href", href);
   }
@@ -552,7 +524,6 @@
     const meta = document.createElement("div");
     meta.className = "meta";
 
-    // Badges (left of name)
     if (badgeImgs && badgeImgs.length) {
       for (const b of badgeImgs) {
         const img = document.createElement("img");
@@ -578,10 +549,8 @@
 
     $stack.appendChild(el);
 
-    // Keep list tight
     while ($stack.children.length > cfg.max) $stack.removeChild($stack.firstChild);
 
-    // TTL removal
     if (cfg.ttl > 0) {
       const removeAtMs = cfg.ttl * 1000;
       const fadeMs = Math.max(0, cfg.fade * 1000);
@@ -596,18 +565,16 @@
   }
 
   // ----------------------------
-  // Demo mode
+  // Demo
   // ----------------------------
   function runDemo(cfg) {
     const samples = [
-      { name: "Fyre", color: "#9bf", text: "Demo chat bubble — readable and stable 👋" },
-      { name: "ModUser", color: "#6f6", text: "Badges should appear left of the name when enabled." },
-      { name: "Viewer", color: "#fc6", text: "Next: BTTV + 7TV emotes inside messages." }
+      { name: "Fyre", color: "#9bf", text: "Demo chat bubble — badges should show before the name 👋" },
+      { name: "ModUser", color: "#6f6", text: "If badgeSets=on, you should see mod/sub badges." },
+      { name: "Viewer", color: "#fc6", text: "Next: tighten 3P emote matching with punctuation." }
     ];
 
-    // If demoBadges=1, we’ll pretend these users have badges
     const demoBadges = [
-      // Using common badge pairs; these only render if badge sets loaded
       "broadcaster/1",
       "moderator/1,subscriber/6",
       "subscriber/3"
@@ -625,7 +592,7 @@
   }
 
   // ----------------------------
-  // Live mode (Twitch IRC)
+  // Live (Twitch IRC)
   // ----------------------------
   function connectIrc(cfg) {
     const chan = String(cfg.channel || "").toLowerCase();
@@ -674,11 +641,8 @@
   async function boot() {
     const defaults = await loadDefaultConfig();
     const patch = uriConfigPatch();
-
-    // If your json doesn’t have cfg.badges.enabled, we treat badges as enabled when badgeProxy exists
     const cfg = deepMerge(defaults, patch);
 
-    // Normalize core config with safe limits
     cfg.channel = String(cfg.channel || "alveussanctuary").toLowerCase();
     cfg.max = clampInt(cfg.max, 8, 1, 200);
     cfg.ttl = clampInt(cfg.ttl, 22, 0, 3600);
@@ -688,20 +652,14 @@
     cfg.demo = !!cfg.demo;
     cfg.demoBadges = !!cfg.demoBadges;
 
-    // Optional: create cfg.badges.enabled default
     if (!cfg.badges) cfg.badges = {};
     if (cfg.badges.enabled == null) cfg.badges.enabled = true;
 
-    // Apply theme
     ensureThemeLink(cfg);
 
-    // 1) Load badges (global + channel) FIRST (also resolves channelId we reuse for BTTV/7TV)
     const badgeLoad = await loadBadgesIfEnabled(cfg);
-
-    // 2) Load 3P emotes (optional)
     const emoteLoad = await load3pEmotesIfEnabled(cfg);
 
-    // Debug banner (single place that tells the truth)
     if (cfg.debug) {
       const badgeStatus = cfg.badges.enabled ? "on" : "off";
       const badgeSets = badgeState.mergedLookup ? "on" : "off";
@@ -713,13 +671,11 @@
         `${demoOrLive} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s | badges=${badgeStatus} | emotes=${emoteState.enabled ? "on" : "off"} | badgeSets=${badgeSets}, 3pEmotes=${emoteState.map.size}${badgeErr}`
       );
 
-      // Also log structured info once
       console.log("[FyreChat] cfg:", cfg);
       console.log("[FyreChat] badges:", badgeLoad);
       console.log("[FyreChat] emotes:", emoteLoad);
     }
 
-    // Start mode
     if (cfg.demo) runDemo(cfg);
     else connectIrc(cfg);
   }
