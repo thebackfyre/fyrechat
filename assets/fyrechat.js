@@ -402,7 +402,7 @@ async function loadThirdPartyEmotes(cfg) {
   // Next step (after you confirm this replacement compiles):
   if (providers.ffz?.enabled) tasks.push(loadFFZ(cfg).catch((e)=>console.warn("FFZ load failed:", e)));
 
-  
+
 
   await Promise.all(tasks);
 
@@ -498,7 +498,7 @@ function add7TVSetEmotes(setObj, providerTag) {
 }
 
 // =========================================================
-// FFZ Emotes (Global + Channel)  [Implemented here, not called yet]
+// FFZ Emotes (Global + Channel)  
 // =========================================================
 
 async function loadFFZ(cfg) {
@@ -830,6 +830,7 @@ function normalizeMaybeProtocolRelative(url) {
     // - 3P emotes (BTTV/7TV) including punctuation adjacency
     const samples = [
       { name: "Fyre",   color: "#9bf", text: "Badges before name 👋  (demoBadges=1 to force badges)" },
+      { name: "Viewer", color: "#fc6", text: "FFZ: OMEGALUL monkaW AYAYA FeelsBadMan FeelsGoodMan" },
       { name: "ModUser",color: "#6f6", text: "BTTV globals: PepeLaugh monkaS (and punctuation: PepeLaugh, monkaS...)" },
       { name: "Viewer", color: "#fc6", text: "7TV globals: catJAM widepeepoHappy (and punctuation: catJAM? widepeepoHappy!)" },
       { name: "Fyre",   color: "#9bf", text: "MIX: PepeLaugh monkaS catJAM widepeepoHappy PepeLaugh!" },
