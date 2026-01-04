@@ -605,41 +605,94 @@
   }
 
   function renderTextWith3PEmotes(rawText) {
-    // Always escape first
-    const escaped = escapeHtml(rawText);
+  // Always escape first
+  const escaped = escapeHtml(rawText);
 
-    // If 3P emotes not enabled/ready, return escaped as-is
-    const cfg = STATE.cfg;
-    if (!cfg?.emotes?.enabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
+  // If 3P emotes not enabled/ready, return escaped as-is
+  const cfg = STATE.cfg;
+  if (!cfg?.emotes?.enabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
 
-    // Tokenize while keeping separators so punctuation survives.
-    // This splits into words/emote candidates and separators.
-    const tokens = escaped.split(/(\s+)/); // keep whitespace tokens
+  // Split while keeping whitespace tokens
+  const tokens = escaped.split(/(\s+)/);
 
-    // For each token, attempt to match emotes with punctuation handling:
-    // e.g. "PepeLaugh," -> match "PepeLaugh" then keep comma
-    const out = tokens.map((tok) => {
-      if (!tok || /^\s+$/.test(tok)) return tok;
+  // Characters we treat as "wrappers" around emotes.
+  // These should be preserved, but not block matching.
+  const WRAP_LEFT  = new Set(["(", "[", "{", "<", '"', "'"]);
+  const WRAP_RIGHT = new Set([")", "]", "}", ">", '"', "'"]);
 
-      // Strip leading/trailing punctuation for matching, but keep them in output.
-      // NOTE: Works well for typical chat punctuation.
-      const m = tok.match(/^([(\[{<"']*)(.*?)([)\]}>"'!?.,:;~]*)$/);
-      if (!m) return tok;
+  // Characters we treat as "trailing punctuation" that should also be preserved.
+  // (We don't treat these as wrappers because they can stack: "!!!", "...,", etc.)
+  const TRAIL_PUNCT = /[!?.,:;~]+$/;
 
-      const lead = m[1] || "";
-      const core = m[2] || "";
-      const tail = m[3] || "";
+  function peelToken(tok) {
+    // tok is already HTML-escaped (so < and > appear as &lt; and &gt;)
+    // We'll handle both raw wrappers and escaped wrappers.
+    // In escaped text, angle brackets become:
+    //   "<" => "&lt;" and ">" => "&gt;"
+    // so we treat those sequences as wrappers too.
+    const LEFT_SEQ = ["(", "[", "{", "&lt;", '"', "&#039;"];
+    const RIGHT_SEQ = [")", "]", "}", "&gt;", '"', "&#039;"];
 
-      // Direct match on core
-      const em = STATE.emoteMap3P.get(core);
-      if (!em) return tok;
+    let left = "";
+    let right = "";
+    let core = tok;
 
-      const url = em.url;
-      return `${lead}<img class="emote" alt="" src="${escapeAttr(url)}">${tail}`;
-    });
+    // 1) Peel trailing punctuation like "!!!" or "...,"
+    let punct = "";
+    const pm = core.match(TRAIL_PUNCT);
+    if (pm) {
+      punct = pm[0];
+      core = core.slice(0, -punct.length);
+    }
 
-    return out.join("");
+    // 2) Repeatedly peel wrapper pairs from both ends.
+    // This handles <emote>, <<emote>>, ( [ { < " ' etc.
+    // We do it in a loop until nothing changes.
+    let changed = true;
+    while (changed && core.length) {
+      changed = false;
+
+      // Peel left wrapper
+      for (const seq of LEFT_SEQ) {
+        if (core.startsWith(seq)) {
+          left += seq;
+          core = core.slice(seq.length);
+          changed = true;
+          break;
+        }
+      }
+
+      // Peel right wrapper
+      for (const seq of RIGHT_SEQ) {
+        if (core.endsWith(seq)) {
+          right = seq + right;
+          core = core.slice(0, -seq.length);
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    // Re-append trailing punctuation to the "right side"
+    right = right + punct;
+
+    return { left, core, right };
   }
+
+  const out = tokens.map((tok) => {
+    if (!tok || /^\s+$/.test(tok)) return tok;
+
+    const { left, core, right } = peelToken(tok);
+    if (!core) return tok;
+
+    const em = STATE.emoteMap3P.get(core);
+    if (!em) return tok;
+
+    return `${left}<img class="emote" alt="" src="${escapeAttr(em.url)}">${right}`;
+  });
+
+  return out.join("");
+}
 
   function escapeAttr(str) {
     return String(str)
