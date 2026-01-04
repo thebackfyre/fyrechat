@@ -364,110 +364,204 @@
     return urls;
   }
 
-  // =========================================================
-  // Third-party emotes (BTTV + 7TV)
-  // =========================================================
+ // =========================================================
+// Third-party emotes (BTTV + 7TV)  [FFZ functions included, not called yet]
+// =========================================================
 
-  async function loadThirdPartyEmotes(cfg) {
-    STATE.emoteErr = "";
+async function loadThirdPartyEmotes(cfg) {
+  STATE.emoteErr = "";
+  STATE.emotesReady = false;
+  STATE.emoteMap3P = new Map();
+  STATE.emoteCount = 0;
+
+  if (!cfg.emotes?.enabled) {
     STATE.emotesReady = false;
-    STATE.emoteMap3P = new Map();
-    STATE.emoteCount = 0;
-
-    if (!cfg.emotes?.enabled) {
-      STATE.emotesReady = false;
-      return;
-    }
-
-    const providers = cfg.emotes.providers || {};
-    const tasks = [];
-
-    if (providers.bttv?.enabled) {
-      tasks.push(loadBTTV(cfg).catch((e) => {
-        console.warn("BTTV load failed:", e);
-      }));
-    }
-    if (providers["7tv"]?.enabled) {
-      tasks.push(load7TV(cfg).catch((e) => {
-        console.warn("7TV load failed:", e);
-      }));
-    }
-
-    await Promise.all(tasks);
-
-    STATE.emoteCount = STATE.emoteMap3P.size;
-    STATE.emotesReady = true;
+    return;
   }
 
-  async function loadBTTV(cfg) {
-    // Global emotes
-    const globalUrl = "https://api.betterttv.net/3/cached/emotes/global";
-    const global = await fetchJson(globalUrl);
+  const providers = cfg.emotes.providers || {};
+  const tasks = [];
 
-    for (const e of Array.isArray(global) ? global : []) {
+  if (providers.bttv?.enabled) {
+    tasks.push(
+      loadBTTV(cfg).catch((e) => {
+        console.warn("BTTV load failed:", e);
+      })
+    );
+  }
+
+  if (providers["7tv"]?.enabled) {
+    tasks.push(
+      load7TV(cfg).catch((e) => {
+        console.warn("7TV load failed:", e);
+      })
+    );
+  }
+
+  // NOTE: FFZ is implemented below, but we are NOT calling it yet.
+  // Next step (after you confirm this replacement compiles):
+  // if (providers.ffz?.enabled) tasks.push(loadFFZ(cfg).catch(...));
+
+  await Promise.all(tasks);
+
+  STATE.emoteCount = STATE.emoteMap3P.size;
+  STATE.emotesReady = true;
+}
+
+function set3PEmote(code, url, provider) {
+  if (!code || !url) return;
+
+  // "First wins" to avoid provider order surprises.
+  // If you prefer "last wins", change to: STATE.emoteMap3P.set(code, {...})
+  if (!STATE.emoteMap3P.has(code)) {
+    STATE.emoteMap3P.set(code, { url, provider });
+  }
+}
+
+async function loadBTTV(cfg) {
+  // Global emotes
+  const globalUrl = "https://api.betterttv.net/3/cached/emotes/global";
+  const global = await fetchJson(globalUrl);
+
+  for (const e of Array.isArray(global) ? global : []) {
+    if (!e || !e.code || !e.id) continue;
+    const url = `https://cdn.betterttv.net/emote/${e.id}/1x`;
+    set3PEmote(e.code, url, "bttv:global");
+  }
+
+  // Channel emotes (requires twitch user id)
+  if (STATE.channelId) {
+    const chanUrl = `https://api.betterttv.net/3/cached/users/twitch/${encodeURIComponent(
+      STATE.channelId
+    )}`;
+    const data = await fetchJson(chanUrl);
+
+    // data.channelEmotes, data.sharedEmotes
+    const all = []
+      .concat(Array.isArray(data?.channelEmotes) ? data.channelEmotes : [])
+      .concat(Array.isArray(data?.sharedEmotes) ? data.sharedEmotes : []);
+
+    for (const e of all) {
       if (!e || !e.code || !e.id) continue;
       const url = `https://cdn.betterttv.net/emote/${e.id}/1x`;
-      STATE.emoteMap3P.set(e.code, { url, provider: "bttv" });
-    }
-
-    // Channel emotes (requires twitch user id)
-    if (STATE.channelId) {
-      const chanUrl = `https://api.betterttv.net/3/cached/users/twitch/${encodeURIComponent(STATE.channelId)}`;
-      const data = await fetchJson(chanUrl);
-
-      // data.channelEmotes, data.sharedEmotes
-      const all = []
-        .concat(Array.isArray(data?.channelEmotes) ? data.channelEmotes : [])
-        .concat(Array.isArray(data?.sharedEmotes) ? data.sharedEmotes : []);
-
-      for (const e of all) {
-        if (!e || !e.code || !e.id) continue;
-        const url = `https://cdn.betterttv.net/emote/${e.id}/1x`;
-        STATE.emoteMap3P.set(e.code, { url, provider: "bttv" });
-      }
+      set3PEmote(e.code, url, "bttv:channel");
     }
   }
+}
 
-  async function load7TV(cfg) {
-    const baseUrl = cfg.emotes.providers["7tv"]?.baseUrl || "https://api.7tv.app/v3";
+async function load7TV(cfg) {
+  const baseUrl =
+    cfg.emotes.providers["7tv"]?.baseUrl || "https://api.7tv.app/v3";
+  const base = stripTrailingSlash(baseUrl);
 
-    // Global emote set
-    // 7TV v3: /emote-sets/global
-    const globalSet = await fetchJson(`${stripTrailingSlash(baseUrl)}/emote-sets/global`);
-    add7TVSetEmotes(globalSet);
+  // Global emote set
+  // 7TV v3: /emote-sets/global
+  const globalSet = await fetchJson(`${base}/emote-sets/global`);
+  add7TVSetEmotes(globalSet, "7tv:global");
 
-    // Channel emote set (optional)
-    // 7TV v3: /users/twitch/{id} -> has emote_set
-    if (STATE.channelId) {
-      const user = await fetchJson(`${stripTrailingSlash(baseUrl)}/users/twitch/${encodeURIComponent(STATE.channelId)}`);
-      if (user && user.emote_set) add7TVSetEmotes(user.emote_set);
-    }
+  // Channel emote set (optional)
+  // 7TV v3: /users/twitch/{id} -> has emote_set
+  if (STATE.channelId) {
+    const user = await fetchJson(
+      `${base}/users/twitch/${encodeURIComponent(STATE.channelId)}`
+    );
+    if (user && user.emote_set) add7TVSetEmotes(user.emote_set, "7tv:channel");
   }
+}
 
-  function add7TVSetEmotes(setObj) {
-    const emotes = Array.isArray(setObj?.emotes) ? setObj.emotes : [];
-    for (const item of emotes) {
-      // Shape: { name, data:{ id, host:{ url, files:[...] } } }
-      const name = item?.name;
-      const data = item?.data;
-      const id = data?.id;
-      const host = data?.host;
-      if (!name || !id || !host?.url || !Array.isArray(host.files)) continue;
+function add7TVSetEmotes(setObj, providerTag) {
+  const emotes = Array.isArray(setObj?.emotes) ? setObj.emotes : [];
 
-      // Pick a reasonable file (prefer 1x-like)
-      // files have names like "1x.webp", "2x.webp", etc.
-      const files = host.files;
-      const file =
-        files.find(f => String(f.name).startsWith("1x")) ||
-        files.find(f => String(f.name).endsWith(".webp")) ||
-        files[0];
+  for (const item of emotes) {
+    // Shape: { name, data:{ id, host:{ url, files:[...] } } }
+    const name = item?.name;
+    const data = item?.data;
+    const host = data?.host;
 
-      if (!file?.name) continue;
+    if (!name || !host?.url || !Array.isArray(host.files)) continue;
 
-      const url = `https:${host.url}/${file.name}`;
-      STATE.emoteMap3P.set(name, { url, provider: "7tv" });
-    }
+    // Prefer 1x, otherwise any .webp, otherwise first
+    const files = host.files;
+    const file =
+      files.find((f) => String(f.name).startsWith("1x")) ||
+      files.find((f) => String(f.name).endsWith(".webp")) ||
+      files[0];
+
+    if (!file?.name) continue;
+
+    // host.url is protocol-relative like //cdn.7tv.app/...
+    const url = `https:${host.url}/${file.name}`;
+    set3PEmote(name, url, providerTag);
   }
+}
+
+// =========================================================
+// FFZ Emotes (Global + Channel)  [Implemented here, not called yet]
+// =========================================================
+
+async function loadFFZ(cfg) {
+  const ffzCfg = cfg?.emotes?.providers?.ffz || {};
+  if (!cfg?.emotes?.enabled || !ffzCfg.enabled) return;
+
+  const baseUrl = ffzCfg.baseUrl || "https://api.frankerfacez.com/v1";
+  const base = stripTrailingSlash(baseUrl);
+
+  // Global: /set/global
+  const global = await fetchJson(`${base}/set/global`);
+  ingestFFZSets(global, "ffz:global");
+
+  // Channel: /room/id/{twitchId}
+  if (STATE.channelId) {
+    const room = await fetchJson(
+      `${base}/room/id/${encodeURIComponent(STATE.channelId)}`
+    );
+    ingestFFZSets(room, "ffz:channel");
+  }
+}
+
+function ingestFFZSets(json, providerTag) {
+  if (!json || !json.sets) return;
+
+  const setsObj = json.sets || {};
+
+  // Some payloads include default_sets for global
+  const defaultSets = Array.isArray(json.default_sets) ? json.default_sets : [];
+
+  // If default_sets exists, prioritize those; otherwise ingest everything.
+  const setIdsToUse =
+    defaultSets.length > 0 ? defaultSets.map(String) : Object.keys(setsObj);
+
+  for (const setId of setIdsToUse) {
+    const set = setsObj[String(setId)];
+    if (!set?.emoticons) continue;
+    ingestFFZEmoticons(set.emoticons, providerTag);
+  }
+}
+
+function ingestFFZEmoticons(emoticons, providerTag) {
+  if (!Array.isArray(emoticons)) return;
+
+  for (const e of emoticons) {
+    const code = e?.name;
+    const urls = e?.urls;
+    if (!code || !urls) continue;
+
+    // Prefer highest available: "4" then "2" then "1"
+    const rawUrl = urls["4"] || urls["2"] || urls["1"];
+    const url = normalizeMaybeProtocolRelative(rawUrl);
+    if (!url) continue;
+
+    set3PEmote(code, url, providerTag);
+  }
+}
+
+function normalizeMaybeProtocolRelative(url) {
+  if (!url) return "";
+  const s = String(url);
+  if (s.startsWith("//")) return "https:" + s;
+  return s;
+}
+
 
   // =========================================================
   // IRC connection
