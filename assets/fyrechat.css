@@ -33,6 +33,18 @@
 
   /* Emotes */
   --emoteSize: 1.25em;
+
+  /* Badge controls */
+  --badgeSize: 1.15em;         /* image height */
+  --badgeGap: 6px;             /* space between badges */
+  --badgePadRight: 6px;        /* space between last badge and name */
+
+  /* Emote controls */
+  --emoteSize: 1.25em;         /* image height */
+  --emoteBaseline: -0.25em;    /* vertical align tweak */
+  --emotePadX: 2px;            /* left/right padding around emotes */
+
+
 }
 
 html, body {
@@ -142,10 +154,10 @@ html, body {
 }
 
 /* Twitch emote images */
-.emote {
+.emote{
   height: var(--emoteSize);
-  vertical-align: -0.25em;
-  margin: 0 2px;
+  vertical-align: var(--emoteBaseline);
+  margin: 0 var(--emotePadX);
 }
 
 /* Twitch badge images */
