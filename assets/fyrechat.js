@@ -604,95 +604,114 @@
     return parts;
   }
 
-  function renderTextWith3PEmotes(rawText) {
-  // Always escape first
-  const escaped = escapeHtml(rawText);
+  // ----------------------------
+// 3P Emote rendering (BTTV / 7TV / FFZ later)
+// Robust to raw "< >" OR escaped "&lt; &gt;" wrappers + punctuation.
+// ----------------------------
 
-  // If 3P emotes not enabled/ready, return escaped as-is
-  const cfg = STATE.cfg;
-  if (!cfg?.emotes?.enabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
+function renderTextWith3PEmotes(rawText, emoteMap) {
+  // Safety: always escape first, then operate on escaped text.
+  // This guarantees we never inject unsafe HTML from chat.
+  const esc = escapeHtml(String(rawText ?? ""));
 
-  // Split while keeping whitespace tokens
-  const tokens = escaped.split(/(\s+)/);
+  // Split into whitespace + non-whitespace tokens so spacing is preserved exactly.
+  const tokens = esc.split(/(\s+)/);
 
-  // Characters we treat as "wrappers" around emotes.
-  // These should be preserved, but not block matching.
-  const WRAP_LEFT  = new Set(["(", "[", "{", "<", '"', "'"]);
-  const WRAP_RIGHT = new Set([")", "]", "}", ">", '"', "'"]);
+  const out = [];
+  for (const tok of tokens) {
+    if (!tok) continue;
 
-  // Characters we treat as "trailing punctuation" that should also be preserved.
-  // (We don't treat these as wrappers because they can stack: "!!!", "...,", etc.)
-  const TRAIL_PUNCT = /[!?.,:;~]+$/;
-
-  function peelToken(tok) {
-    // tok is already HTML-escaped (so < and > appear as &lt; and &gt;)
-    // We'll handle both raw wrappers and escaped wrappers.
-    // In escaped text, angle brackets become:
-    //   "<" => "&lt;" and ">" => "&gt;"
-    // so we treat those sequences as wrappers too.
-    const LEFT_SEQ = ["(", "[", "{", "&lt;", '"', "&#039;"];
-    const RIGHT_SEQ = [")", "]", "}", "&gt;", '"', "&#039;"];
-
-    let left = "";
-    let right = "";
-    let core = tok;
-
-    // 1) Peel trailing punctuation like "!!!" or "...,"
-    let punct = "";
-    const pm = core.match(TRAIL_PUNCT);
-    if (pm) {
-      punct = pm[0];
-      core = core.slice(0, -punct.length);
+    // whitespace token
+    if (/^\s+$/.test(tok)) {
+      out.push(tok);
+      continue;
     }
 
-    // 2) Repeatedly peel wrapper pairs from both ends.
-    // This handles <emote>, <<emote>>, ( [ { < " ' etc.
-    // We do it in a loop until nothing changes.
-    let changed = true;
-    while (changed && core.length) {
-      changed = false;
+    // Try to peel wrappers/punct and match the core token.
+    const peeled = peelTokenForEmote(tok);
+    const url = emoteMap?.get?.(peeled.core);
 
-      // Peel left wrapper
-      for (const seq of LEFT_SEQ) {
-        if (core.startsWith(seq)) {
-          left += seq;
-          core = core.slice(seq.length);
-          changed = true;
-          break;
-        }
-      }
-
-      // Peel right wrapper
-      for (const seq of RIGHT_SEQ) {
-        if (core.endsWith(seq)) {
-          right = seq + right;
-          core = core.slice(0, -seq.length);
-          changed = true;
-          break;
-        }
-      }
+    if (url) {
+      // Keep any left/right wrapper text exactly as it appeared (already escaped).
+      out.push(
+        `${peeled.left}<img class="emote" alt="${peeled.core}" src="${url}">${peeled.right}`
+      );
+    } else {
+      out.push(tok);
     }
-
-    // Re-append trailing punctuation to the "right side"
-    right = right + punct;
-
-    return { left, core, right };
   }
-
-  const out = tokens.map((tok) => {
-    if (!tok || /^\s+$/.test(tok)) return tok;
-
-    const { left, core, right } = peelToken(tok);
-    if (!core) return tok;
-
-    const em = STATE.emoteMap3P.get(core);
-    if (!em) return tok;
-
-    return `${left}<img class="emote" alt="" src="${escapeAttr(em.url)}">${right}`;
-  });
 
   return out.join("");
 }
+
+/**
+ * Takes an *escaped* token and returns:
+ * - left: leading wrapper chars (&lt; ( [ { " etc.)
+ * - core: the emote candidate (string to lookup)
+ * - right: trailing wrapper/punct (&gt; ) ] } ! ? , . : etc.)
+ *
+ * Works whether the token contains:
+ *   "&lt;widepeepoHappy&gt;!"
+ * or (in case something slips through) raw "<widepeepoHappy>!"
+ */
+function peelTokenForEmote(token) {
+  let t = String(token);
+
+  let left = "";
+  let right = "";
+
+  // 1) Leading wrappers (prefer escaped forms because token is escaped)
+  const LEADING = ["&lt;", "<", "(", "[", "{", "“", "‘", "\"", "'"];
+  // 2) Trailing wrappers
+  const TRAILING = ["&gt;", ">", ")", "]", "}", "”", "’", "\"", "'"];
+
+  // Peel leading wrappers repeatedly
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const w of LEADING) {
+      if (t.startsWith(w) && t.length > w.length) {
+        left += w;
+        t = t.slice(w.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  // Peel trailing wrappers repeatedly
+  changed = true;
+  while (changed) {
+    changed = false;
+    for (const w of TRAILING) {
+      if (t.endsWith(w) && t.length > w.length) {
+        right = w + right;
+        t = t.slice(0, -w.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  // 3) Trailing punctuation (keep it in right)
+  // Handles: ! ? . , : ; … and combinations like "?!", "..." etc.
+  const punctMatch = t.match(/^(.*?)([!?,.;:…]+)$/);
+  if (punctMatch) {
+    t = punctMatch[1];
+    right = punctMatch[2] + right;
+  }
+
+  // 4) Also allow leading punctuation like ":" in ":)" cases
+  // (This is optional. You can remove if you dislike matching)
+  const leadPunctMatch = t.match(/^([:;]+)(.+)$/);
+  if (leadPunctMatch) {
+    left += leadPunctMatch[1];
+    t = leadPunctMatch[2];
+  }
+
+  return { left, core: t, right };
+}
+
 
   function escapeAttr(str) {
     return String(str)
