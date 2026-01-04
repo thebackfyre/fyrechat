@@ -1,804 +1,694 @@
-/* ============================================================================
-  FyreChat (assets/fyrechat.js)
+/* fyrechat.js
+   FyreChat: configurable Twitch chat overlay
+   - Loads defaults from ./assets/config/fyrechat.default.json
+   - Deep-merges config with URI overrides
+   - IRC websocket (anon) for chat messages
+   - Twitch emotes via IRC tags
+   - Badges via Cloudflare Worker proxy (badgeProxy)
+   - BTTV + 7TV emotes (optional) with simple caching
+*/
 
-  - Loads default config from: ./assets/config/fyrechat.default.json
-  - Deep merges config + URL params
-  - Connects to Twitch IRC via WebSocket
-  - Renders:
-      - message stack (multi bubbles)
-      - Twitch emotes (from IRC tags)
-      - Twitch badges (via your CF Worker proxy)
-      - BTTV emotes (global + channel)
-      - 7TV emotes (channel, optional global attempt)
+(() => {
+  // -----------------------------
+  // 0) Helpers
+  // -----------------------------
+  const $ = (id) => document.getElementById(id);
 
-  URL params (optional):
-    ?ch=valkyrae
-    ?max=8
-    ?ttl=22
-    ?fade=2
-    ?debug=1
-    ?demo=1
-    ?theme=glass
-
-  Notes:
-  - This file assumes CSS already defines .msg/.badge/.emote etc.
-  - Your badgeProxy should expose:
-      /badges/global
-      /badges/channels/:id
-============================================================================ */
-
-/* ----------------------------- DOM refs ---------------------------------- */
-const $debug = document.getElementById("debug");
-const $stack = document.getElementById("stack");
-
-/* -------------------------- Base defaults -------------------------------- */
-const DEFAULTS = {
-  channel: "alveussanctuary",
-  max: 8,
-  ttl: 22,
-  fade: 2,
-  debug: false,
-
-  badgeProxy: "",
-
-  demo: false,
-  demoBadges: false,
-
-  theme: "glass",
-
-  emotes: {
-    enabled: true,
-    providers: {
-      bttv: { enabled: true },
-      "7tv": { enabled: true, baseUrl: "https://api.7tv.app/v3" }
-    },
-    cacheMinutes: 360
+  function clampInt(value, fallback, min, max) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    const i = Math.floor(n);
+    return Math.max(min, Math.min(max, i));
   }
-};
+  function clampFloat(value, fallback, min, max) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+  }
+  function escapeHtml(str) {
+    return String(str)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
-/* ------------------------------- Boot ------------------------------------ */
-boot().catch((err) => {
-  setDebug(true, `Boot error: ${String(err?.message || err)}`);
-});
+  function deepMerge(base, patch) {
+    // merges patch into base (non-mutating)
+    if (patch == null) return structuredClone(base);
+    const out = Array.isArray(base) ? [...base] : { ...base };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const bv = base && typeof base === "object" ? base[k] : undefined;
+        out[k] = deepMerge(bv && typeof bv === "object" ? bv : {}, v);
+      } else if (v !== undefined) {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
 
-/* ============================================================================
-   BOOT / CONFIG
-============================================================================ */
-async function boot() {
+  async function fetchJson(url, opts = {}) {
+    const res = await fetch(url, opts);
+    if (!res.ok) throw new Error(`Fetch failed ${res.status} for ${url}`);
+    return await res.json();
+  }
+
+  // -----------------------------
+  // 1) Config loading (defaults + URI)
+  // -----------------------------
   const params = new URLSearchParams(location.search);
 
-  // 1) start from hard defaults
-  let config = structuredCloneCompat(DEFAULTS);
+  const DEFAULT_FALLBACK = {
+    channel: "alveussanctuary",
+    max: 8,
+    ttl: 22,
+    fade: 2,
+    debug: false,
+    demo: false,
+    demoBadges: false,
+    theme: "glass",
+    badgeProxy: "https://twitch-badge-proxy.thebackfyre.workers.dev",
+    emotes: {
+      enabled: true,
+      providers: {
+        bttv: { enabled: true },
+        "7tv": { enabled: true, baseUrl: "https://api.7tv.app/v3" }
+      },
+      cacheMinutes: 360
+    }
+  };
 
-  // 2) load JSON config (deep merge)
-  const cfgResult = await loadDefaultConfig("./assets/config/fyrechat.default.json");
-  if (cfgResult.ok) {
-    config = deepMerge(config, cfgResult.data);
+  function configFromUri() {
+    // Keep URI override surface small and predictable
+    const uri = {};
+
+    if (params.has("ch")) uri.channel = String(params.get("ch") || "").toLowerCase();
+    if (params.has("max")) uri.max = clampInt(params.get("max"), undefined, 1, 200);
+    if (params.has("ttl")) uri.ttl = clampInt(params.get("ttl"), undefined, 0, 3600);
+    if (params.has("fade")) uri.fade = clampFloat(params.get("fade"), undefined, 0, 30);
+
+    if (params.get("debug") === "1") uri.debug = true;
+    if (params.get("debug") === "0") uri.debug = false;
+
+    if (params.get("demo") === "1") uri.demo = true;
+    if (params.get("demo") === "0") uri.demo = false;
+
+    if (params.get("demoBadges") === "1") uri.demoBadges = true;
+    if (params.get("demoBadges") === "0") uri.demoBadges = false;
+
+    if (params.has("theme")) uri.theme = String(params.get("theme") || "");
+
+    // Emotes quick toggles
+    if (params.get("emotes") === "0") uri.emotes = { enabled: false };
+    if (params.get("emotes") === "1") uri.emotes = { enabled: true };
+
+    return uri;
   }
 
-  // 3) apply URL overrides (deep merge)
-  config = applyUrlOverrides(config, params);
+  // -----------------------------
+  // 2) DOM refs
+  // -----------------------------
+  const $debug = $("debug");
+  const $stack = $("stack");
+  const $themeLink = document.getElementById("themeLink");
 
-  // 4) normalize keys (we use ttl/fade consistently; no ttlSeconds confusion)
-  config.max = clampInt(config.max, DEFAULTS.max, 1, 200);
-  config.ttl = clampInt(config.ttl, DEFAULTS.ttl, 0, 3600);
-  config.fade = clampFloat(config.fade, DEFAULTS.fade, 0, 30);
+  // -----------------------------
+  // 3) Badge + emote state (caches)
+  // -----------------------------
+  const badgeState = {
+    ready: false,
+    globalSets: {},     // badgeSetName -> versions map
+    channelSets: {},    // badgeSetName -> versions map
+  };
 
-  // 5) update theme link if theme param exists
-  applyTheme(config);
+  // name -> { url, provider }
+  const thirdPartyEmotes = new Map();
 
-  // 6) debug banner
-  const cfgStatus = cfgResult.ok ? "cfg=OK" : `cfg=FAIL (${cfgResult.status || "fetch"})`;
-  setDebug(!!config.debug, `${cfgStatus} | ch=${config.channel} | max=${config.max} | ttl=${config.ttl}s | fade=${config.fade}s`);
+  // Simple in-memory cache for this session
+  const sessionCache = new Map(); // key -> { atMs, data }
 
-  // 7) start demo or live
-  if (truthyParam(params.get("demo")) || config.demo) {
-    runDemo(config);
-  } else {
-    connectIrc(config);
+  function cacheGet(key, maxAgeMs) {
+    const hit = sessionCache.get(key);
+    if (!hit) return null;
+    if (Date.now() - hit.atMs > maxAgeMs) return null;
+    return hit.data;
   }
-}
-
-async function loadDefaultConfig(path) {
-  try {
-    const res = await fetch(path, { cache: "no-store" });
-    if (!res.ok) return { ok: false, status: res.status };
-    const data = await res.json();
-    return { ok: true, data };
-  } catch (e) {
-    return { ok: false, status: "network" };
+  function cacheSet(key, data) {
+    sessionCache.set(key, { atMs: Date.now(), data });
   }
-}
 
-function applyUrlOverrides(config, params) {
-  // Only override when param exists. This avoids the null->0 clamp bug.
-  const out = structuredCloneCompat(config);
-
-  const ch = params.get("ch");
-  if (ch) out.channel = String(ch).toLowerCase();
-
-  if (params.has("max")) out.max = clampInt(params.get("max"), out.max, 1, 200);
-  if (params.has("ttl")) out.ttl = clampInt(params.get("ttl"), out.ttl, 0, 3600);
-  if (params.has("fade")) out.fade = clampFloat(params.get("fade"), out.fade, 0, 30);
-
-  if (params.has("debug")) out.debug = truthyParam(params.get("debug"));
-  if (params.has("theme")) out.theme = String(params.get("theme"));
-
-  // Allow swapping badgeProxy via URL if you want
-  if (params.has("badgeProxy")) out.badgeProxy = String(params.get("badgeProxy"));
-
-  // Demo toggles
-  if (params.has("demo")) out.demo = truthyParam(params.get("demo"));
-  if (params.has("demoBadges")) out.demoBadges = truthyParam(params.get("demoBadges"));
-
-  return out;
-}
-
-function applyTheme(config) {
-  const link = document.getElementById("themeLink");
-  if (!link) return;
-
-  // If you later decide to let theme be a full URL, allow http(s) too.
-  // For now, treat theme as a local filename in assets/themes/
-  const themeName = (config.theme || "glass").replace(/[^a-z0-9_-]/gi, "");
-  link.setAttribute("href", `./assets/themes/${themeName}.css`);
-}
-
-/* ============================================================================
-   TWITCH IRC
-============================================================================ */
-function connectIrc(config) {
-  const chan = (config.channel || "alveussanctuary").toLowerCase();
-  const ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
-  const anonNick = "justinfan" + Math.floor(Math.random() * 80000 + 1000);
-
-  // Badge + emote caches (per session)
-  const badgeStore = makeBadgeStore(config);
-  const emoteStore = makeEmoteStore(config);
-
-  ws.addEventListener("open", () => {
-    setDebug(!!config.debug, `Connected ✅ as ${anonNick} (joining #${chan})`);
-    ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
-    ws.send("PASS SCHMOOPIIE");
-    ws.send("NICK " + anonNick);
-    ws.send("JOIN #" + chan);
-  });
-
-  ws.addEventListener("message", async (ev) => {
-    const data = String(ev.data || "");
-    if (data.startsWith("PING")) {
-      ws.send("PONG :tmi.twitch.tv");
+  // -----------------------------
+  // 4) Debug banner
+  // -----------------------------
+  function setDebug(on, text) {
+    if (!on) {
+      $debug.style.display = "none";
       return;
     }
+    $debug.style.display = "block";
+    $debug.textContent = text;
+  }
 
-    const lines = data.split("\r\n").filter(Boolean);
-    for (const line of lines) {
-      if (!line.includes(" PRIVMSG #")) continue;
+  function debugLine(cfg, extra = "") {
+    const parts = [
+      cfg.demo ? "DEMO" : "IRC",
+      `ch=${cfg.channel}`,
+      `max=${cfg.max}`,
+      `ttl=${cfg.ttl}s`,
+      `fade=${cfg.fade}s`,
+      `badges=${cfg.badgeProxy ? "on" : "off"}`,
+      `emotes=${cfg.emotes?.enabled ? "on" : "off"}`,
+      extra
+    ].filter(Boolean);
+    return parts.join(" | ");
+  }
 
-      const parsed = parsePrivmsg(line);
-      if (!parsed) continue;
+  // -----------------------------
+  // 5) Theme selection
+  // -----------------------------
+  function applyTheme(cfg) {
+    if (!$themeLink) return;
+    // Very simple: map "glass" -> ./assets/themes/glass.css
+    // If you add more themes, keep file name = theme name.
+    const theme = (cfg.theme || "glass").trim();
+    $themeLink.href = `./assets/themes/${theme}.css`;
+  }
 
-      // kick off cache fills (don’t block rendering)
-      if (parsed.userId) {
-        badgeStore.warm(parsed.userId).catch(() => {});
-        emoteStore.warm(parsed.userId).catch(() => {});
-      }
-
-      const htmlParts = await buildFinalMessageParts(parsed, emoteStore);
-
-      addMessage({
-        config,
-        name: parsed.name,
-        color: parsed.color,
-        userId: parsed.userId,
-        badges: parsed.badges,
-        htmlParts,
-        badgeStore
-      });
+  // -----------------------------
+  // 6) Twitch IRC parsing
+  // -----------------------------
+  function parseTags(raw) {
+    const out = {};
+    for (const p of raw.split(";")) {
+      const eq = p.indexOf("=");
+      const k = eq === -1 ? p : p.slice(0, eq);
+      const v = eq === -1 ? "" : p.slice(eq + 1);
+      out[k] = v;
     }
-  });
-
-  ws.addEventListener("close", () => {
-    setDebug(!!config.debug, "Disconnected — retrying in 2s…");
-    setTimeout(() => connectIrc(config), 2000);
-  });
-
-  ws.addEventListener("error", () => {
-    setDebug(!!config.debug, "WebSocket error (network/CSP).");
-  });
-}
-
-function parsePrivmsg(line) {
-  let tags = {};
-  let rest = line;
-
-  if (rest.startsWith("@")) {
-    const spaceIdx = rest.indexOf(" ");
-    const rawTags = rest.slice(1, spaceIdx);
-    tags = parseTags(rawTags);
-    rest = rest.slice(spaceIdx + 1);
+    return out;
   }
 
-  const msgIdx = rest.indexOf(" :");
-  if (msgIdx === -1) return null;
+  function parsePrivmsg(line) {
+    let tags = {};
+    let rest = line;
 
-  const text = rest.slice(msgIdx + 2);
+    if (rest.startsWith("@")) {
+      const spaceIdx = rest.indexOf(" ");
+      const rawTags = rest.slice(1, spaceIdx);
+      tags = parseTags(rawTags);
+      rest = rest.slice(spaceIdx + 1);
+    }
 
-  return {
-    text,
-    name: tags["display-name"] || "Unknown",
-    color: tags["color"] || "#ffffff",
-    emotesTag: tags["emotes"] || "",
-    badges: tags["badges"] || "",
-    userId: tags["user-id"] || ""
-  };
-}
+    const msgIdx = rest.indexOf(" :");
+    if (msgIdx === -1) return null;
 
-function parseTags(raw) {
-  const out = {};
-  for (const p of raw.split(";")) {
-    const eq = p.indexOf("=");
-    const k = eq === -1 ? p : p.slice(0, eq);
-    const v = eq === -1 ? "" : p.slice(eq + 1);
-    out[k] = v;
-  }
-  return out;
-}
+    const text = rest.slice(msgIdx + 2);
+    const name = tags["display-name"] || "Unknown";
+    const color = tags["color"] || "#ffffff";
 
-/* ============================================================================
-   EMOTES (Twitch + BTTV + 7TV)
-============================================================================ */
-async function buildFinalMessageParts(parsed, emoteStore) {
-  // 1) Start with twitch emote parsing (image tags for twitch emotes only)
-  //    This returns an array of strings/html segments.
-  let parts = buildTwitchEmoteHtmlParts(parsed.text, parsed.emotesTag);
+    // badges tag looks like: "moderator/1,subscriber/12"
+    const badges = tags["badges"] || "";
+    const emotes = tags["emotes"] || "";
 
-  // 2) If extra providers enabled, replace matching plain-text tokens in parts.
-  //    We'll only replace in text segments (not inside existing <img>).
-  const enabled = emoteStore.enabled();
-  if (!enabled) return parts;
-
-  // Convert parts into "tokens": {type:'html'|'text', value}
-  // Our twitch builder already outputs safe html and <img> tags.
-  const tokens = parts.map((p) => {
-    return p.includes("<img") ? { type: "html", value: p } : { type: "text", value: p };
-  });
-
-  const map = emoteStore.getMergedMap(); // { "OMEGALUL": "https://..." , ... }
-  if (!map || Object.keys(map).length === 0) {
-    return tokens.map((t) => t.value);
+    return { name, color, text, badges, emotes };
   }
 
-  // Replace emote words in text tokens by splitting on whitespace but keeping punctuation.
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t.type !== "text") continue;
+  // -----------------------------
+  // 7) Emote rendering
+  // -----------------------------
+  function buildTwitchEmoteRanges(emotesTag) {
+    // returns ranges: [{start,end,id}]
+    if (!emotesTag) return [];
+    const ranges = [];
+    for (const def of emotesTag.split("/").filter(Boolean)) {
+      const [id, locs] = def.split(":");
+      if (!id || !locs) continue;
+      for (const loc of locs.split(",")) {
+        const [startStr, endStr] = loc.split("-");
+        const start = Number(startStr), end = Number(endStr);
+        if (Number.isFinite(start) && Number.isFinite(end)) {
+          ranges.push({ start, end, id });
+        }
+      }
+    }
+    ranges.sort((a, b) => a.start - b.start);
+    return ranges;
+  }
 
-    // We keep it simple: split into "word-ish" chunks while preserving separators.
-    const chunks = splitKeepDelimiters(t.value);
-    const out = [];
+  function messageHtmlPartsWithTwitchEmotes(text, emotesTag) {
+    const ranges = buildTwitchEmoteRanges(emotesTag);
+    if (!ranges.length) return [escapeHtml(text)];
 
-    for (const c of chunks) {
-      const key = c;
-      const url = map[key];
-      if (url) {
-        out.push(`<img class="emote" alt="${escapeAttr(key)}" src="${escapeAttr(url)}">`);
+    const parts = [];
+    let cursor = 0;
+    for (const r of ranges) {
+      if (r.start > cursor) parts.push(escapeHtml(text.slice(cursor, r.start)));
+      parts.push(
+        `<img class="emote" alt="" src="https://static-cdn.jtvnw.net/emoticons/v2/${r.id}/default/dark/1.0">`
+      );
+      cursor = r.end + 1;
+    }
+    if (cursor < text.length) parts.push(escapeHtml(text.slice(cursor)));
+    return parts;
+  }
+
+  function applyThirdPartyEmotesToHtml(htmlSafeText) {
+    // htmlSafeText is *already escaped* (except existing <img> tags).
+    // We will do a conservative token replace only on plain text segments.
+    // Because we already build Twitch emotes by inserting <img>, the safest approach:
+    // - Split on <img ...> and only replace in text pieces.
+    const chunks = htmlSafeText.split(/(<img[^>]*>)/g);
+    for (let i = 0; i < chunks.length; i++) {
+      if (chunks[i].startsWith("<img")) continue;
+
+      // Replace emote codes as whole words
+      // (simple and fast; upgrade later if you want punctuation/edge rules)
+      const words = chunks[i].split(/(\s+)/);
+      for (let w = 0; w < words.length; w++) {
+        const token = words[w];
+        if (!token || token.trim() === "") continue;
+
+        // token is escaped; emote names are plain; compare raw token string
+        const hit = thirdPartyEmotes.get(token);
+        if (hit) {
+          words[w] = `<img class="emote" alt="" src="${hit.url}">`;
+        }
+      }
+      chunks[i] = words.join("");
+    }
+    return chunks.join("");
+  }
+
+  // -----------------------------
+  // 8) Badge rendering
+  // -----------------------------
+  function parseBadgeList(badgesTag) {
+    // "moderator/1,subscriber/12" -> [{set:"moderator",ver:"1"}, ...]
+    if (!badgesTag) return [];
+    return badgesTag.split(",").filter(Boolean).map((pair) => {
+      const [set, ver] = pair.split("/");
+      return { set, ver };
+    }).filter(x => x.set && x.ver);
+  }
+
+  function badgeUrlFromSets(setName, version) {
+    // Prefer channel set, fallback to global
+    const ch = badgeState.channelSets?.[setName]?.[version];
+    if (ch?.image_url_1x) return ch.image_url_1x;
+
+    const gl = badgeState.globalSets?.[setName]?.[version];
+    if (gl?.image_url_1x) return gl.image_url_1x;
+
+    return null;
+  }
+
+  function buildBadgesHtml(badgesTag) {
+    const list = parseBadgeList(badgesTag);
+    if (!list.length) return "";
+
+    const imgs = [];
+    for (const b of list) {
+      const url = badgeUrlFromSets(b.set, b.ver);
+      if (!url) continue;
+      imgs.push(`<img class="badge" alt="" src="${url}">`);
+    }
+    return imgs.join("");
+  }
+
+  // -----------------------------
+  // 9) Rendering bubbles
+  // -----------------------------
+  function addMessage(cfg, msg) {
+    const el = document.createElement("div");
+    el.className = "msg";
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+
+    // Badges (images) in front of the name
+    if (cfg.badgeProxy && badgeState.ready) {
+      const badgesHtml = buildBadgesHtml(msg.badges);
+      if (badgesHtml) {
+        const badgeWrap = document.createElement("span");
+        badgeWrap.className = "badges";
+        badgeWrap.innerHTML = badgesHtml;
+        meta.appendChild(badgeWrap);
+      }
+    }
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "name";
+    nameEl.textContent = msg.name;
+    nameEl.style.color = msg.color || "#fff";
+
+    const textEl = document.createElement("div");
+    textEl.className = "text";
+
+    // Twitch emotes first
+    let html = messageHtmlPartsWithTwitchEmotes(msg.text, msg.emotes).join("");
+
+    // Then third-party emotes (BTTV/7TV)
+    if (cfg.emotes?.enabled && thirdPartyEmotes.size > 0) {
+      html = applyThirdPartyEmotesToHtml(html);
+    }
+
+    textEl.innerHTML = html;
+
+    meta.appendChild(nameEl);
+    el.appendChild(meta);
+    el.appendChild(textEl);
+
+    $stack.appendChild(el);
+
+    // Keep stack <= max
+    while ($stack.children.length > cfg.max) {
+      $stack.removeChild($stack.firstChild);
+    }
+
+    // TTL removal
+    if (cfg.ttl > 0) {
+      const removeAtMs = cfg.ttl * 1000;
+      const fadeMs = Math.max(0, (cfg.fade ?? 0) * 1000);
+
+      if (fadeMs > 0 && removeAtMs > fadeMs) {
+        setTimeout(() => el.classList.add("out"), removeAtMs - fadeMs);
+        setTimeout(() => el.remove(), removeAtMs);
       } else {
-        out.push(escapeHtml(c));
+        setTimeout(() => el.remove(), removeAtMs);
+      }
+    }
+  }
+
+  // -----------------------------
+  // 10) Badge loading (via Worker)
+  // -----------------------------
+  async function loadBadges(cfg) {
+    if (!cfg.badgeProxy) return;
+
+    const base = cfg.badgeProxy.replace(/\/$/, "");
+    const channelLogin = String(cfg.channel || "").toLowerCase();
+
+    // Get Twitch user id via proxy
+    // expected: GET /id?login=valkyrae -> { id: "79615025" } (or similar)
+    const idKey = `twitch:id:${channelLogin}`;
+    let channelId = cacheGet(idKey, 24 * 60 * 60 * 1000);
+    if (!channelId) {
+      const idJson = await fetchJson(`${base}/id?login=${encodeURIComponent(channelLogin)}`, { cache: "no-store" });
+      channelId = idJson?.id || idJson?.data?.[0]?.id || null;
+      if (channelId) cacheSet(idKey, channelId);
+    }
+
+    // Global badges
+    const globalKey = "twitch:badges:global";
+    let global = cacheGet(globalKey, 24 * 60 * 60 * 1000);
+    if (!global) {
+      global = await fetchJson(`${base}/badges/global`, { cache: "no-store" });
+      cacheSet(globalKey, global);
+    }
+
+    // Channel badges
+    let channel = null;
+    if (channelId) {
+      const channelKey = `twitch:badges:channel:${channelId}`;
+      channel = cacheGet(channelKey, 24 * 60 * 60 * 1000);
+      if (!channel) {
+        channel = await fetchJson(`${base}/badges/channels/${encodeURIComponent(channelId)}`, { cache: "no-store" });
+        cacheSet(channelKey, channel);
       }
     }
 
-    // IMPORTANT:
-    // t.value was already escaped in twitch builder; we re-escape here.
-    // To avoid double escaping, we used splitKeepDelimiters on raw segment.
-    // So for text tokens, we treat it as raw and escape everything.
-    // That means we need to rebuild from parsed.text instead of already-escaped parts.
-    // To keep correctness, we’ll regenerate baseline as plain text (no twitch emotes)
-    // when extra providers are enabled, THEN overlay twitch emotes separately.
+    // Normalize shape: {badge_sets:{ setName:{ versions:{ "1":{image_url_1x...}}}}}
+    function normalizeBadgeSets(json) {
+      const sets = json?.badge_sets || json?.data?.badge_sets || null;
+      if (!sets) return {};
+      const out = {};
+      for (const [setName, setObj] of Object.entries(sets)) {
+        const versions = setObj?.versions || {};
+        out[setName] = versions;
+      }
+      return out;
+    }
+
+    badgeState.globalSets = normalizeBadgeSets(global);
+    badgeState.channelSets = normalizeBadgeSets(channel);
+    badgeState.ready = true;
   }
 
-  // Safer approach:
-  // - Rebuild from raw parsed.text with 3rd-party emotes first,
-  // - Then overlay twitch emotes by ranges (twitch emotes should win if overlap).
-  // BUT overlap is rare; we’ll do: 3rd-party pass on raw text, then twitch pass.
-  const thirdPass = applyThirdPartyEmotes(parsed.text, map);
-  const finalParts = buildTwitchEmoteHtmlPartsFromPreHtml(thirdPass, parsed.emotesTag);
-  return finalParts;
-}
+  // -----------------------------
+  // 11) Third-party emotes (BTTV + 7TV)
+  // -----------------------------
+  async function loadThirdPartyEmotes(cfg) {
+    if (!cfg.emotes?.enabled) return;
 
-// Twitch emotes only (range-based)
-function buildTwitchEmoteHtmlParts(text, emotesTag) {
-  if (!emotesTag) return [escapeHtml(text)];
+    const cacheMinutes = clampInt(cfg.emotes.cacheMinutes, 360, 1, 7 * 24 * 60);
+    const maxAgeMs = cacheMinutes * 60 * 1000;
 
-  const ranges = [];
-  for (const def of emotesTag.split("/").filter(Boolean)) {
-    const [id, locs] = def.split(":");
-    if (!id || !locs) continue;
-    for (const loc of locs.split(",")) {
-      const [startStr, endStr] = loc.split("-");
-      const start = Number(startStr), end = Number(endStr);
-      if (Number.isFinite(start) && Number.isFinite(end)) ranges.push({ start, end, id });
+    const channelLogin = String(cfg.channel || "").toLowerCase();
+    const base7 = cfg.emotes?.providers?.["7tv"]?.baseUrl || "https://api.7tv.app/v3";
+
+    // Resolve Twitch user id via badge proxy if present (best), otherwise skip channel emotes for providers needing id.
+    let channelId = null;
+    if (cfg.badgeProxy) {
+      const base = cfg.badgeProxy.replace(/\/$/, "");
+      const idKey = `twitch:id:${channelLogin}`;
+      channelId = cacheGet(idKey, 24 * 60 * 60 * 1000);
+      if (!channelId) {
+        try {
+          const idJson = await fetchJson(`${base}/id?login=${encodeURIComponent(channelLogin)}`, { cache: "no-store" });
+          channelId = idJson?.id || idJson?.data?.[0]?.id || null;
+          if (channelId) cacheSet(idKey, channelId);
+        } catch {
+          // ok to continue without channelId
+        }
+      }
+    }
+
+    // BTTV
+    if (cfg.emotes?.providers?.bttv?.enabled) {
+      const keyG = "bttv:global";
+      let global = cacheGet(keyG, maxAgeMs);
+      if (!global) {
+        global = await fetchJson("https://api.betterttv.net/3/cached/emotes/global", { cache: "no-store" });
+        cacheSet(keyG, global);
+      }
+      for (const e of global || []) {
+        // url schema: https://cdn.betterttv.net/emote/{id}/1x
+        thirdPartyEmotes.set(e.code, { url: `https://cdn.betterttv.net/emote/${e.id}/1x`, provider: "bttv" });
+      }
+
+      if (channelId) {
+        const keyC = `bttv:chan:${channelId}`;
+        let chan = cacheGet(keyC, maxAgeMs);
+        if (!chan) {
+          // returns { channelEmotes:[], sharedEmotes:[] }
+          chan = await fetchJson(`https://api.betterttv.net/3/cached/users/twitch/${encodeURIComponent(channelId)}`, { cache: "no-store" });
+          cacheSet(keyC, chan);
+        }
+        const all = [...(chan?.channelEmotes || []), ...(chan?.sharedEmotes || [])];
+        for (const e of all) {
+          thirdPartyEmotes.set(e.code, { url: `https://cdn.betterttv.net/emote/${e.id}/1x`, provider: "bttv" });
+        }
+      }
+    }
+
+    // 7TV
+    if (cfg.emotes?.providers?.["7tv"]?.enabled) {
+      // Global set (best-effort; 7TV sometimes changes this endpoint behavior)
+      const keyG = "7tv:global";
+      let global = cacheGet(keyG, maxAgeMs);
+      if (!global) {
+        try {
+          global = await fetchJson(`${base7}/emote-sets/global`, { cache: "no-store" });
+          cacheSet(keyG, global);
+        } catch {
+          global = null;
+        }
+      }
+      const globalEmotes = global?.emotes || global?.data?.emotes || [];
+      for (const e of globalEmotes) {
+        const url = pick7tvUrl(e);
+        if (url) thirdPartyEmotes.set(e.name, { url, provider: "7tv" });
+      }
+
+      if (channelId) {
+        const keyC = `7tv:chan:${channelId}`;
+        let user = cacheGet(keyC, maxAgeMs);
+        if (!user) {
+          try {
+            user = await fetchJson(`${base7}/users/twitch/${encodeURIComponent(channelId)}`, { cache: "no-store" });
+            cacheSet(keyC, user);
+          } catch {
+            user = null;
+          }
+        }
+        const emotes = user?.emote_set?.emotes || [];
+        for (const e of emotes) {
+          const url = pick7tvUrl(e);
+          if (url) thirdPartyEmotes.set(e.name, { url, provider: "7tv" });
+        }
+      }
     }
   }
-  if (!ranges.length) return [escapeHtml(text)];
-  ranges.sort((a, b) => a.start - b.start);
 
-  const parts = [];
-  let cursor = 0;
-  for (const r of ranges) {
-    if (r.start > cursor) parts.push(escapeHtml(text.slice(cursor, r.start)));
-    parts.push(`<img class="emote" alt="" src="https://static-cdn.jtvnw.net/emoticons/v2/${r.id}/default/dark/1.0">`);
-    cursor = r.end + 1;
+  function pick7tvUrl(emoteObj) {
+    // 7TV URLs: emote.data.host.url + files
+    // Example shape: e.data.host.files = [{name:"1x.webp", format:"WEBP"}...]
+    const host = emoteObj?.data?.host;
+    if (!host?.url || !Array.isArray(host.files)) return null;
+
+    // Prefer 1x WEBP/PNG, fallback first file
+    const preferred = host.files.find(f => /(^1x\.)/.test(f.name)) || host.files[0];
+    if (!preferred?.name) return null;
+
+    return `https:${host.url}/${preferred.name}`;
   }
-  if (cursor < text.length) parts.push(escapeHtml(text.slice(cursor)));
-  return parts;
-}
 
-// Apply third party emotes to raw text first (word-token match)
-function applyThirdPartyEmotes(rawText, emoteMap) {
-  // Split into chunks with delimiters preserved (spaces + punctuation)
-  const chunks = splitKeepDelimiters(rawText);
-  const out = [];
+  // -----------------------------
+  // 12) Demo mode
+  // -----------------------------
+  function runDemo(cfg) {
+    const samples = [
+      { name: "Fyre", color: "#9bf", text: "Demo mode: bubbles, badges (optional), and emotes test 👋" },
+      { name: "ModUser", color: "#6f6", text: "Try typing Kappa or a BTTV/7TV emote code if loaded." },
+      { name: "Viewer", color: "#fc6", text: "If badges are enabled, demoBadges=1 can force a badge preview." },
+      { name: "Backfyre", color: "#f9b", text: "Fast chat stress test: max stack + TTL should behave." },
+    ];
 
-  for (const c of chunks) {
-    const url = emoteMap[c];
-    if (url) {
-      out.push(`<img class="emote" alt="${escapeAttr(c)}" src="${escapeAttr(url)}">`);
-    } else {
-      out.push(escapeHtml(c));
+    // Fake badges (only for demo preview)
+    const fakeBadges = cfg.demoBadges
+      ? "moderator/1,subscriber/12"
+      : "";
+
+    let i = 0;
+    setInterval(() => {
+      const s = samples[i++ % samples.length];
+      addMessage(cfg, {
+        name: s.name,
+        color: s.color,
+        text: s.text,
+        badges: fakeBadges,
+        emotes: "" // twitch emotes tag not present in demo
+      });
+    }, 900);
+  }
+
+  // -----------------------------
+  // 13) Live IRC
+  // -----------------------------
+  function connectIrc(cfg) {
+    const chan = String(cfg.channel || "").toLowerCase();
+    const ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+    const anonNick = "justinfan" + Math.floor(Math.random() * 80000 + 1000);
+
+    ws.addEventListener("open", () => {
+      setDebug(cfg.debug, `Connected ✅ as ${anonNick} (joining #${chan})`);
+      ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+      ws.send("PASS SCHMOOPIIE");
+      ws.send("NICK " + anonNick);
+      ws.send("JOIN #" + chan);
+    });
+
+    ws.addEventListener("message", (ev) => {
+      const data = String(ev.data || "");
+      if (data.startsWith("PING")) {
+        ws.send("PONG :tmi.twitch.tv");
+        return;
+      }
+
+      const lines = data.split("\r\n").filter(Boolean);
+      for (const line of lines) {
+        if (!line.includes(" PRIVMSG #")) continue;
+        const parsed = parsePrivmsg(line);
+        if (!parsed) continue;
+
+        addMessage(cfg, {
+          name: parsed.name,
+          color: parsed.color,
+          text: parsed.text,
+          badges: parsed.badges,
+          emotes: parsed.emotes
+        });
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      setDebug(cfg.debug, "Disconnected — retrying in 2s…");
+      setTimeout(() => connectIrc(cfg), 2000);
+    });
+
+    ws.addEventListener("error", () => {
+      setDebug(cfg.debug, "WebSocket error (network/CSP).");
+    });
+  }
+
+  // -----------------------------
+  // 14) Boot
+  // -----------------------------
+  async function boot() {
+    // Load default JSON config (and deep-merge into fallback)
+    let fileCfg = {};
+    try {
+      fileCfg = await fetchJson("./assets/config/fyrechat.default.json", { cache: "no-store" });
+    } catch (e) {
+      // If fetch fails, we continue with fallback
+      fileCfg = {};
     }
-  }
 
-  return out.join("");
-}
+    // Merge order:
+    // 1) fallback (hardcoded)
+    // 2) file config (fyrechat.default.json)
+    // 3) URI overrides
+    const merged = deepMerge(DEFAULT_FALLBACK, fileCfg);
+    const cfg = deepMerge(merged, configFromUri());
 
-// Overlay twitch emotes on top of the third-party html string by re-walking raw text ranges.
-// Easiest reliable way:
-function buildTwitchEmoteHtmlPartsFromPreHtml(preHtml, emotesTag) {
-  // If twitch has no emotes, preHtml is already fully escaped + third-party <img>.
-  if (!emotesTag) return [preHtml];
+    // Normalize key settings (guarantee numbers)
+    cfg.channel = String(cfg.channel || "alveussanctuary").toLowerCase();
+    cfg.max = clampInt(cfg.max, 8, 1, 200);
+    cfg.ttl = clampInt(cfg.ttl, 22, 0, 3600);
+    cfg.fade = clampFloat(cfg.fade, 2, 0, 30);
+    cfg.debug = Boolean(cfg.debug);
+    cfg.demo = Boolean(cfg.demo);
+    cfg.demoBadges = Boolean(cfg.demoBadges);
 
-  // We can’t range-index into HTML safely. So we choose a simpler priority:
-  // If twitch emotes exist, render twitch emotes only (as before).
-  // This means twitch emotes will show correctly; 3rd-party emotes still show for non-twitch tokens.
-  // (In practice, overlap is rare and acceptable.)
-  //
-  // To preserve both perfectly would require a more complex token stream renderer.
-  //
-  // So: return preHtml as single part, then run a twitch-only build and prefer twitch.
-  // That would drop 3rd-party. Not acceptable.
-  //
-  // Instead: we’ll return preHtml and accept that twitch emotes already embedded by ranges
-  // from raw text is the correct baseline. Therefore we should do:
-  // - third-party emotes applied as HTML
-  // - then *also* apply twitch emotes only when there is an exact token match (rare)
-  //
-  // For now: keep twitch emotes from IRC tags as the baseline, then 3rd-party as extra
-  // is already handled by the earlier “fallback” strategy — we’re here only because
-  // we used third-party-first. We'll keep it simple and just return preHtml.
-  return [preHtml];
-}
+    applyTheme(cfg);
+    setDebug(cfg.debug, debugLine(cfg, "loading…"));
 
-// Split text into chunks: words + separators, keeping separators as chunks.
-// This lets us match emote names exactly as standalone tokens (including punctuation tokens won't match).
-function splitKeepDelimiters(str) {
-  // Keep spaces and punctuation as separate chunks.
-  // Words are sequences of letters/numbers/underscore.
-  // Emote names typically match that shape.
-  const re = /([A-Za-z0-9_]+|[^A-Za-z0-9_]+)/g;
-  return String(str).match(re) || [String(str)];
-}
-
-function makeEmoteStore(config) {
-  const state = {
-    cacheUntil: 0,
-    map: {}, // merged {name:url}
-    bttv: { global: null, channel: null },
-    stv: { global: null, channel: null },
-    userId: ""
-  };
-
-  function enabled() {
-    return !!(config.emotes && config.emotes.enabled);
-  }
-
-  function cacheMs() {
-    const minutes = Number(config.emotes?.cacheMinutes ?? 360);
-    return Math.max(1, minutes) * 60 * 1000;
-  }
-
-  async function warm(userId) {
-    if (!enabled()) return;
-    if (!userId) return;
-
-    const now = Date.now();
-    if (now < state.cacheUntil && state.userId === userId) return;
-
-    state.userId = userId;
-    state.cacheUntil = now + cacheMs();
-
-    const providers = config.emotes?.providers || {};
-    const wantsBTTV = !!providers?.bttv?.enabled;
-    const wants7TV = !!providers?.["7tv"]?.enabled;
-
+    // Load badges + third-party emotes before running (best effort)
     const tasks = [];
-    if (wantsBTTV) tasks.push(loadBTTV(userId));
-    if (wants7TV) tasks.push(load7TV(userId, providers["7tv"]?.baseUrl || "https://api.7tv.app/v3"));
+
+    if (cfg.badgeProxy) {
+      tasks.push(
+        loadBadges(cfg).catch((e) => {
+          badgeState.ready = false;
+          if (cfg.debug) setDebug(true, debugLine(cfg, "badges=fail"));
+        })
+      );
+    }
+
+    if (cfg.emotes?.enabled) {
+      tasks.push(
+        loadThirdPartyEmotes(cfg).catch(() => {
+          // non-fatal
+        })
+      );
+    }
 
     await Promise.allSettled(tasks);
 
-    // Merge maps
-    const merged = {};
-    // global first, channel overwrites
-    if (state.bttv.global) Object.assign(merged, state.bttv.global);
-    if (state.bttv.channel) Object.assign(merged, state.bttv.channel);
-    if (state.stv.global) Object.assign(merged, state.stv.global);
-    if (state.stv.channel) Object.assign(merged, state.stv.channel);
+    // Update debug line now that we know what loaded
+    let extra = [];
+    extra.push(`badgeSets=${badgeState.ready ? "ready" : "off"}`);
+    extra.push(`3pEmotes=${thirdPartyEmotes.size}`);
 
-    state.map = merged;
+    setDebug(cfg.debug, debugLine(cfg, extra.join(", ")));
+
+    // Start demo or live
+    if (cfg.demo) runDemo(cfg);
+    else connectIrc(cfg);
   }
 
-  function getMergedMap() {
-    return state.map || {};
-  }
-
-  async function loadBTTV(userId) {
-    try {
-      const [g, c] = await Promise.all([
-        fetchJson("https://api.betterttv.net/3/cached/emotes/global"),
-        fetchJson(`https://api.betterttv.net/3/cached/users/twitch/${encodeURIComponent(userId)}`)
-      ]);
-
-      // Global
-      state.bttv.global = {};
-      if (Array.isArray(g)) {
-        for (const e of g) {
-          if (!e?.code || !e?.id) continue;
-          state.bttv.global[e.code] = `https://cdn.betterttv.net/emote/${e.id}/1x`;
-        }
-      }
-
-      // Channel (sharedEmotes + channelEmotes)
-      state.bttv.channel = {};
-      const all = []
-        .concat(Array.isArray(c?.sharedEmotes) ? c.sharedEmotes : [])
-        .concat(Array.isArray(c?.channelEmotes) ? c.channelEmotes : []);
-
-      for (const e of all) {
-        if (!e?.code || !e?.id) continue;
-        state.bttv.channel[e.code] = `https://cdn.betterttv.net/emote/${e.id}/1x`;
-      }
-    } catch {
-      // swallow
-    }
-  }
-
-  async function load7TV(userId, baseUrl) {
-    try {
-      // Channel: get 7TV user mapping from twitch id
-      const u = await fetchJson(`${baseUrl}/users/twitch/${encodeURIComponent(userId)}`);
-      const setId = u?.emote_set?.id;
-      if (setId) {
-        const set = await fetchJson(`${baseUrl}/emote-sets/${encodeURIComponent(setId)}`);
-        state.stv.channel = {};
-        for (const e of Array.isArray(set?.emotes) ? set.emotes : []) {
-          const name = e?.name;
-          const host = e?.data?.host?.url;
-          const files = e?.data?.host?.files;
-          if (!name || !host || !Array.isArray(files) || files.length === 0) continue;
-
-          // pick a small-ish webp if present; otherwise first
-          const pick = files.find(f => String(f?.name || "").includes("1x")) || files[0];
-          const fileName = pick?.name;
-          if (!fileName) continue;
-
-          // host usually like: //cdn.7tv.app/emote/...
-          const url = (host.startsWith("//") ? "https:" + host : host) + "/" + fileName;
-          state.stv.channel[name] = url;
-        }
-      }
-    } catch {
-      // swallow
-    }
-
-    // Optional: attempt global (not all setups have a stable v3 global endpoint)
-    // We’ll try once, but ignore errors.
-    try {
-      // Some setups use /emote-sets/global; if it 404s, ignore.
-      const g = await fetchJson(`${baseUrl}/emote-sets/global`);
-      state.stv.global = {};
-      for (const e of Array.isArray(g?.emotes) ? g.emotes : []) {
-        const name = e?.name;
-        const host = e?.data?.host?.url;
-        const files = e?.data?.host?.files;
-        if (!name || !host || !Array.isArray(files) || files.length === 0) continue;
-        const pick = files.find(f => String(f?.name || "").includes("1x")) || files[0];
-        const fileName = pick?.name;
-        if (!fileName) continue;
-        const url = (host.startsWith("//") ? "https:" + host : host) + "/" + fileName;
-        state.stv.global[name] = url;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return { enabled, warm, getMergedMap };
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-/* ============================================================================
-   BADGES (via CF Worker proxy)
-============================================================================ */
-function makeBadgeStore(config) {
-  const state = {
-    global: null,
-    channels: new Map(), // userId -> badge json
-    lastGlobalFetch: 0,
-    lastChannelFetch: new Map()
-  };
-
-  function proxyBase() {
-    return String(config.badgeProxy || "").replace(/\/+$/, "");
-  }
-
-  async function warm(userId) {
-    const base = proxyBase();
-    if (!base) return;
-
-    const now = Date.now();
-    const ttlMs = 60 * 60 * 1000; // 1 hour cache
-
-    // Global
-    if (!state.global || now - state.lastGlobalFetch > ttlMs) {
-      const g = await safeFetchJson(`${base}/badges/global`);
-      if (g) {
-        state.global = g;
-        state.lastGlobalFetch = now;
-      }
-    }
-
-    // Channel (by twitch user id)
-    if (userId) {
-      const last = state.lastChannelFetch.get(userId) || 0;
-      if (!state.channels.get(userId) || now - last > ttlMs) {
-        const c = await safeFetchJson(`${base}/badges/channels/${encodeURIComponent(userId)}`);
-        if (c) {
-          state.channels.set(userId, c);
-          state.lastChannelFetch.set(userId, now);
-        }
-      }
-    }
-  }
-
-  function getBadgeUrl(userId, setId, version) {
-    // prefer channel-specific, fallback to global
-    const chan = userId ? state.channels.get(userId) : null;
-
-    const url =
-      pickBadgeUrlFromJson(chan, setId, version) ||
-      pickBadgeUrlFromJson(state.global, setId, version);
-
-    return url || "";
-  }
-
-  return { warm, getBadgeUrl };
-}
-
-async function safeFetchJson(url) {
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-function pickBadgeUrlFromJson(json, setId, version) {
-  // Twitch badge JSON format: { badge_sets: { [setId]: { versions: { [ver]: { image_url_1x }}}}}
-  try {
-    const v = json?.badge_sets?.[setId]?.versions?.[version];
-    return v?.image_url_1x || v?.image_url_2x || v?.image_url_4x || "";
-  } catch {
-    return "";
-  }
-}
-
-/* ============================================================================
-   RENDERING
-============================================================================ */
-function addMessage({ config, name, color, userId, badges, htmlParts, badgeStore }) {
-  const el = document.createElement("div");
-  el.className = "msg";
-
-  const meta = document.createElement("div");
-  meta.className = "meta";
-
-  // Badges first
-  if (badges && badges !== "(none)") {
-    const badgeEls = buildBadgesHtml(userId, badges, badgeStore);
-    for (const b of badgeEls) meta.appendChild(b);
-  }
-
-  const nameEl = document.createElement("span");
-  nameEl.className = "name";
-  nameEl.textContent = name;
-  nameEl.style.color = color || "#fff";
-
-  const textEl = document.createElement("div");
-  textEl.className = "text";
-  textEl.innerHTML = Array.isArray(htmlParts) ? htmlParts.join("") : String(htmlParts || "");
-
-  meta.appendChild(nameEl);
-  el.appendChild(meta);
-  el.appendChild(textEl);
-
-  $stack.appendChild(el);
-
-  // Keep list tight
-  while ($stack.children.length > config.max) {
-    $stack.removeChild($stack.firstChild);
-  }
-
-  // TTL removal
-  if (config.ttl > 0) {
-    const removeAtMs = config.ttl * 1000;
-    const fadeMs = Math.max(0, config.fade * 1000);
-
-    if (fadeMs > 0 && removeAtMs > fadeMs) {
-      setTimeout(() => el.classList.add("out"), removeAtMs - fadeMs);
-      setTimeout(() => el.remove(), removeAtMs);
-    } else {
-      setTimeout(() => el.remove(), removeAtMs);
-    }
-  }
-}
-
-function buildBadgesHtml(userId, badgesTag, badgeStore) {
-  const out = [];
-  // badgesTag example: "moderator/1,subscriber/12"
-  const defs = String(badgesTag || "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  for (const d of defs) {
-    const [setId, version] = d.split("/");
-    if (!setId || !version) continue;
-
-    const url = badgeStore.getBadgeUrl(userId, setId, version);
-    if (!url) continue;
-
-    const img = document.createElement("img");
-    img.className = "badge";
-    img.alt = `${setId}/${version}`;
-    img.src = url;
-    out.push(img);
-  }
-  return out;
-}
-
-/* ============================================================================
-   DEMO
-============================================================================ */
-function runDemo(config) {
-  const badgeStore = makeBadgeStore(config);
-  const emoteStore = makeEmoteStore(config);
-
-  // Warm caches using a fake-ish id (won’t matter unless demoBadges true)
-  badgeStore.warm("1").catch(() => {});
-  emoteStore.warm("1").catch(() => {});
-
-  const samples = [
-    { name: "Fyre", color: "#9bf", text: "Demo mode ✅ multi-bubble, clean spacing, no cropping." },
-    { name: "ModUser", color: "#6f6", text: "Next: BTTV + 7TV emotes + theme polish." },
-    { name: "Viewer", color: "#fc6", text: "Testing in alveussanctuary is perfect for stability." }
-  ];
-
-  let i = 0;
-  setInterval(async () => {
-    const s = samples[i++ % samples.length];
-
-    // In demo, we can optionally show fake badges if demoBadges=1
-    const demoBadgesTag = config.demoBadges ? "moderator/1,subscriber/12" : "";
-
-    // Build emotes if enabled (demo will only work if providers load; otherwise plain text)
-    await emoteStore.warm("1");
-    const parsed = { text: s.text, emotesTag: "", userId: "1", badges: demoBadgesTag, name: s.name, color: s.color };
-    const htmlParts = await buildFinalMessageParts(parsed, emoteStore);
-
-    addMessage({
-      config,
-      name: s.name,
-      color: s.color,
-      userId: "1",
-      badges: demoBadgesTag,
-      htmlParts,
-      badgeStore
-    });
-  }, 1200);
-}
-
-/* ============================================================================
-   UTIL
-============================================================================ */
-function setDebug(on, text) {
-  if (!$debug) return;
-  $debug.style.display = on ? "block" : "none";
-  if (on) $debug.textContent = text || "";
-}
-
-function truthyParam(v) {
-  if (v === null || v === undefined) return false;
-  const s = String(v).toLowerCase();
-  return s === "1" || s === "true" || s === "yes" || s === "on";
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function escapeAttr(str) {
-  // good enough for src/alt attributes
-  return String(str).replaceAll('"', "&quot;");
-}
-
-function clampInt(value, fallback, min, max) {
-  // IMPORTANT: params.get() returns null when missing; don't treat that as 0.
-  if (value === null || value === undefined || value === "") return fallback;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  const i = Math.floor(n);
-  return Math.max(min, Math.min(max, i));
-}
-
-function clampFloat(value, fallback, min, max) {
-  if (value === null || value === undefined || value === "") return fallback;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
-
-function deepMerge(target, source) {
-  // Returns a NEW object; does not mutate inputs
-  const out = Array.isArray(target) ? target.slice() : { ...(target || {}) };
-
-  if (source === null || source === undefined) return out;
-
-  for (const [k, v] of Object.entries(source)) {
-    if (Array.isArray(v)) {
-      out[k] = v.slice();
-      continue;
-    }
-    if (isPlainObject(v)) {
-      out[k] = deepMerge(isPlainObject(out[k]) ? out[k] : {}, v);
-      continue;
-    }
-    out[k] = v;
-  }
-  return out;
-}
-
-function isPlainObject(v) {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
-function structuredCloneCompat(obj) {
-  // Safari/older env safety
-  try {
-    return structuredClone(obj);
-  } catch {
-    return JSON.parse(JSON.stringify(obj));
-  }
-}
+  // Run
+  boot();
+})();
