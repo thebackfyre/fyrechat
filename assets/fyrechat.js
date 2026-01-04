@@ -572,6 +572,21 @@
       { name: "Fyre", color: "#9bf", text: "Demo chat bubble — badges should show before the name 👋" },
       { name: "ModUser", color: "#6f6", text: "If badgeSets=on, you should see mod/sub badges." },
       { name: "Viewer", color: "#fc6", text: "Next: tighten 3P emote matching with punctuation." }
+   // 1) Twitch “global” emote parsing (works only if your demo path runs through the same Twitch parser;
+  // otherwise it will remain text — that’s OK, we’re validating 3P + punctuation too)
+  { name: "Fyre", color: "#9bf", text: "Twitch global: Kappa LUL PogChamp BibleThump" },
+
+  // 2) BTTV globals (should render if BTTV provider map is loaded)
+  { name: "ModUser", color: "#6f6", text: "BTTV: PepeLaugh monkaS" },
+
+  // 3) 7TV globals (should render if 7TV provider map is loaded)
+  { name: "Viewer", color: "#fc6", text: "7TV: catJAM widepeepoHappy" },
+
+  // 4) Punctuation + adjacency stress test (common failure point)
+  { name: "Fyre", color: "#9bf", text: "Punct: Kappa! PepeLaugh, monkaS... catJAM? widepeepoHappy :)"} ,
+
+  // 5) Mixed single-line “kitchen sink”
+  { name: "Viewer", color: "#fc6", text: "MIX: Kappa PepeLaugh monkaS catJAM widepeepoHappy" }
     ];
 
     const demoBadges = [
