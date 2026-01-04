@@ -42,12 +42,11 @@
 
     emotes: {
       enabled: true,
-     "providers": {
-    "bttv": { "enabled": true },
-    "7tv": { "enabled": true, "baseUrl": "https://api.7tv.app/v3" },
-    "ffz": { "enabled": true, "baseUrl": "https://api.frankerfacez.com/v1" }
-  }
-
+      providers: {
+        bttv: { enabled: true },
+        "7tv": { enabled: true, baseUrl: "https://api.7tv.app/v3" },
+        "ffz": { enabled: true, baseUrl: "https://api.frankerfacez.com/v1" }
+      },
       cacheMinutes: 360
     }
   };
