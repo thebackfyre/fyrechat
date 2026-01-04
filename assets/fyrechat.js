@@ -564,47 +564,140 @@
     }
   }
 
-  // ----------------------------
-  // Demo
-  // ----------------------------
-  function runDemo(cfg) {
-    const samples = [
-      { name: "Fyre", color: "#9bf", text: "Demo chat bubble — badges should show before the name 👋" },
-      { name: "ModUser", color: "#6f6", text: "If badgeSets=on, you should see mod/sub badges." },
-      { name: "Viewer", color: "#fc6", text: "Next: tighten 3P emote matching with punctuation." },
-   // 1) Twitch “global” emote parsing (works only if your demo path runs through the same Twitch parser;
-  // otherwise it will remain text — that’s OK, we’re validating 3P + punctuation too)
-  { name: "Fyre", color: "#9bf", text: "Twitch global: Kappa LUL PogChamp BibleThump" },
+// ----------------------------
+// Demo
+// ----------------------------
+function runDemo(cfg) {
+  // A controlled test harness:
+  // - Badges: show before name (when cfg.demoBadges = true)
+  // - 3P emotes: BTTV + 7TV by name replacement (PepeLaugh, monkaS, catJAM, etc.)
+  // - Twitch emote words (Kappa, LUL...) will remain TEXT in demo unless you build a Twitch emote dictionary later.
 
-  // 2) BTTV globals (should render if BTTV provider map is loaded)
-  { name: "ModUser", color: "#6f6", text: "BTTV: PepeLaugh monkaS" },
+  const samples = [
+    { name: "Fyre",    color: "#9bf", text: "Demo chat bubble — badges should show before the name 👋" },
+    { name: "ModUser", color: "#6f6", text: "If badgeSets=on, you should see mod/sub badges." },
+    { name: "Viewer",  color: "#fc6", text: "Next: tighten 3P emote matching with punctuation." },
 
-  // 3) 7TV globals (should render if 7TV provider map is loaded)
-  { name: "Viewer", color: "#fc6", text: "7TV: catJAM widepeepoHappy" },
+    // 1) Twitch “global” emote WORDS (demo will show as text; live will render via IRC emote ranges)
+    { name: "Fyre", color: "#9bf", text: "Twitch words: Kappa LUL PogChamp BibleThump" },
 
-  // 4) Punctuation + adjacency stress test (common failure point)
-  { name: "Fyre", color: "#9bf", text: "Punct: Kappa! PepeLaugh, monkaS... catJAM? widepeepoHappy :)"} ,
+    // 2) BTTV globals (should render if BTTV provider map is loaded)
+    { name: "ModUser", color: "#6f6", text: "BTTV: PepeLaugh monkaS" },
 
-  // 5) Mixed single-line “kitchen sink”
-  { name: "Viewer", color: "#fc6", text: "MIX: Kappa PepeLaugh monkaS catJAM widepeepoHappy" }
-    ];
+    // 3) 7TV globals (should render if 7TV provider map is loaded)
+    { name: "Viewer", color: "#fc6", text: "7TV: catJAM widepeepoHappy" },
 
-    const demoBadges = [
-      "broadcaster/1",
-      "moderator/1,subscriber/6",
-      "subscriber/3"
-    ];
+    // 4) Punctuation + adjacency stress test (common failure point)
+    { name: "Fyre", color: "#9bf", text: "Punct: Kappa! PepeLaugh, monkaS... catJAM? widepeepoHappy :)" },
 
-    let i = 0;
-    setInterval(() => {
-      const s = samples[i % samples.length];
-      const badgeTag = cfg.demoBadges ? demoBadges[i % demoBadges.length] : "(none)";
-      const badgeImgs = badgeUrlsFromTag(badgeTag);
+    // 5) Mixed single-line “kitchen sink”
+    { name: "Viewer", color: "#fc6", text: "MIX: Kappa PepeLaugh monkaS catJAM widepeepoHappy" }
+  ];
 
-      addMessage(cfg, s.name, s.color, [escapeHtml(s.text)], badgeImgs);
-      i++;
-    }, 1100);
+  const demoBadges = [
+    "broadcaster/1",
+    "moderator/1,subscriber/6",
+    "subscriber/3"
+  ];
+
+  let i = 0;
+  setInterval(() => {
+    const s = samples[i % samples.length];
+
+    // Badge images (demo-only)
+    const badgeTag  = cfg.demoBadges ? demoBadges[i % demoBadges.length] : "(none)";
+    const badgeImgs = badgeUrlsFromTag(badgeTag);
+
+    // IMPORTANT: demo must pass through 3P emote replacement
+    const htmlParts = buildDemoHtmlParts(cfg, s.text);
+
+    addMessage(cfg, s.name, s.color, htmlParts, badgeImgs);
+    i++;
+  }, 1100);
+}
+
+/**
+ * Demo message rendering pipeline:
+ * 1) Escape text safely
+ * 2) Replace 3P emotes (BTTV/7TV) using whatever emote index the app already loaded
+ * 3) Return ["...html..."] to match addMessage(cfg, ..., htmlParts, ...)
+ */
+function buildDemoHtmlParts(cfg, text) {
+  let html = escapeHtml(text);
+  html = replaceThirdPartyEmotesInHtml(cfg, html);
+  return [html];
+}
+
+/**
+ * Replace BTTV/7TV emotes by token name.
+ * - Preserves whitespace
+ * - Handles punctuation adjacency (e.g., "PepeLaugh," "catJAM?" "monkaS...")
+ */
+function replaceThirdPartyEmotesInHtml(cfg, html) {
+  // Split and keep whitespace as tokens
+  const chunks = html.split(/(\s+)/);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk || /^\s+$/.test(chunk)) continue;
+
+    // Pull punctuation off the front/back so core can match emote name
+    const m = chunk.match(/^([(\[{<"'“‘]*)(.*?)([)\]}>.,!?;:'"”’]*?)$/);
+    if (!m) continue;
+
+    const lead = m[1] || "";
+    const core = m[2] || "";
+    const tail = m[3] || "";
+
+    const url = getThirdPartyEmoteUrl(cfg, core);
+    if (!url) continue;
+
+    chunks[i] = `${lead}<img class="emote" alt="${core}" src="${url}">${tail}`;
   }
+
+  return chunks.join("");
+}
+
+/**
+ * Lookup for 3P emotes (BTTV/7TV).
+ * This is intentionally defensive because your codebase may store the emote index
+ * under different names.
+ *
+ * If demo still shows NO 3P emotes after this, we’ll align this function with your
+ * real in-memory emote map (the one used to compute "3pEmotes=##" in the banner).
+ */
+function getThirdPartyEmoteUrl(cfg, code) {
+  if (!code) return null;
+
+  // Try common places your app might store the emote index.
+
+  // 1) cfg-based
+  if (cfg && cfg._emotes3pMap && typeof cfg._emotes3pMap.get === "function") {
+    return cfg._emotes3pMap.get(code) || null;
+  }
+  if (cfg && cfg._emotes3pByCode && typeof cfg._emotes3pByCode === "object") {
+    return cfg._emotes3pByCode[code] || null;
+  }
+
+  // 2) global state patterns
+  const g = globalThis;
+
+  if (g.__FYRECHAT_STATE?.emotes?.map instanceof Map) {
+    return g.__FYRECHAT_STATE.emotes.map.get(code) || null;
+  }
+  if (g.__FYRECHAT_STATE?.emotes?.byCode) {
+    return g.__FYRECHAT_STATE.emotes.byCode[code] || null;
+  }
+
+  if (g.FYRECHAT?.emotes3p instanceof Map) {
+    return g.FYRECHAT.emotes3p.get(code) || null;
+  }
+  if (g.FYRECHAT?.emotes3pByCode) {
+    return g.FYRECHAT.emotes3pByCode[code] || null;
+  }
+
+  return null;
+}
 
   // ----------------------------
   // Live (Twitch IRC)
