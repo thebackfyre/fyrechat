@@ -420,16 +420,37 @@
     }
 
     // Normalize shape: {badge_sets:{ setName:{ versions:{ "1":{image_url_1x...}}}}}
-    function normalizeBadgeSets(json) {
+     function normalizeBadgeSets(json) {
       const sets = json?.badge_sets || json?.data?.badge_sets || null;
       if (!sets) return {};
+
       const out = {};
       for (const [setName, setObj] of Object.entries(sets)) {
-        const versions = setObj?.versions || {};
-        out[setName] = versions;
+        const versions = setObj?.versions;
+
+        // Twitch returns versions as an ARRAY: [{ id:"1", image_url_1x... }, ...]
+        // Convert to a map keyed by version id: { "1": { ... }, ... }
+        if (Array.isArray(versions)) {
+          const map = {};
+          for (const v of versions) {
+            if (v?.id != null) map[String(v.id)] = v;
+          }
+          out[setName] = map;
+          continue;
+        }
+
+        // Some proxies/variants might already be a map
+        if (versions && typeof versions === "object") {
+          out[setName] = versions;
+          continue;
+        }
+
+        out[setName] = {};
       }
+
       return out;
     }
+
 
     badgeState.globalSets = normalizeBadgeSets(global);
     badgeState.channelSets = normalizeBadgeSets(channel);
