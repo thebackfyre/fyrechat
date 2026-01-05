@@ -972,7 +972,7 @@ function updateDebugBanner(cfg, statusText) {
     : "";
 
   $debug.textContent =
-    `${mode} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s}` +
+    `${mode} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s` +
     ` | badges=${badgesOn ? "on" : "off"} | emotes=${emotesOn ? "on" : "off"}` +
     ` | badgeSets=${badgeSets}, 3pEmotes=${emoteCount}` +
     (providerFlags ? ` [${providerFlags}]` : "") +
