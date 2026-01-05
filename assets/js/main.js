@@ -111,27 +111,40 @@ function runDemo(cfg) {
     // PogChamp: "88",
   };
 
-  function buildTwitchEmotesTag(text) {
-    // Find all occurrences of known twitch emote tokens as whole words
-    // and build Twitch-style tag: id:start-end,id:start-end/... grouped by id
-    const hitsById = new Map();
+ function buildTwitchEmotesTag(text) {
+  // CSP-safe: no RegExp constructors, just deterministic string scanning
+  const hitsById = new Map();
 
-    for (const [token, id] of Object.entries(TWITCH_EMOTE_IDS)) {
-      const re = new RegExp(`\\b${token}\\b`, "g");
-      let m;
-      while ((m = re.exec(text)) !== null) {
-        const start = m.index;
-        const end = start + token.length - 1;
+  for (const [token, id] of Object.entries(TWITCH_EMOTE_IDS)) {
+    const L = token.length;
+    let idx = 0;
+
+    while (true) {
+      idx = text.indexOf(token, idx);
+      if (idx === -1) break;
+
+      const before = idx === 0 ? " " : text[idx - 1];
+      const after = idx + L >= text.length ? " " : text[idx + L];
+
+      // "word boundary" check (good enough for demo tokens like Kappa)
+      const isWordChar = (c) => /[A-Za-z0-9_]/.test(c);
+      if (!isWordChar(before) && !isWordChar(after)) {
+        const start = idx;
+        const end = idx + L - 1;
         if (!hitsById.has(id)) hitsById.set(id, []);
         hitsById.get(id).push(`${start}-${end}`);
       }
-    }
 
-    if (hitsById.size === 0) return "";
-    return [...hitsById.entries()]
-      .map(([id, ranges]) => `${id}:${ranges.join(",")}`)
-      .join("/");
+      idx += L;
+    }
   }
+
+  if (hitsById.size === 0) return "";
+  return [...hitsById.entries()]
+    .map(([id, ranges]) => `${id}:${ranges.join(",")}`)
+    .join("/");
+}
+
 
   // ---------------------------------------------------------
   // DEMO TEST MATRIX (self-identifying labels in text)
@@ -246,4 +259,5 @@ function demoBadgeUrlsFromTag(badgeTag) {
 
   return urls;
 }
+
 
