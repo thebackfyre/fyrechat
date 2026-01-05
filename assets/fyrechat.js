@@ -312,6 +312,12 @@ function applyStyleVars(cfg) {
   set("--emoteSize", s.emoteSize);
   set("--emoteBaseline", s.emoteBaseline);
   set("--emotePadX", s.emotePadX);
+
+  set("--nameSize", s.nameSize);
+  set("--nameWeight", s.nameWeight);
+  set("--textSize", s.textSize);
+  set("--lineHeight", s.lineHeight);
+
 }
 
 
