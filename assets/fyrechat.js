@@ -269,6 +269,10 @@ function applyUriOverrides(cfg) {
 }
 
 
+  function isObj(v) {
+    return v && typeof v === "object" && !Array.isArray(v);
+  }
+
   // =========================================================
   // Theme
   // =========================================================
@@ -290,8 +294,6 @@ function applyUriOverrides(cfg) {
 // Style Configs
 // =========================================================
 
-console.log("cfg.style =", cfg.style);
-console.log("root css --nameSize =", getComputedStyle(document.documentElement).getPropertyValue("--nameSize"));
 
 
 function applyStyleVars(cfg) {
