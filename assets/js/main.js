@@ -126,7 +126,15 @@ function runDemo(cfg) {
         const after = idx + L >= text.length ? " " : text[idx + L];
 
         // Word-ish boundary for demo tokens like "Kappa"
-        const isWordChar = (c) => /[A-Za-z0-9_]/.test(c);
+        const isWordChar = (c) => {
+          const code = c.charCodeAt(0);
+          const isNum = code >= 48 && code <= 57;   // 0-9
+          const isUpper = code >= 65 && code <= 90; // A-Z
+          const isLower = code >= 97 && code <= 122;// a-z
+          const isUnderscore = code === 95;         // _
+          return isNum || isUpper || isLower || isUnderscore;
+        };
+
         if (!isWordChar(before) && !isWordChar(after)) {
           const start = idx;
           const end = idx + L - 1;
@@ -217,3 +225,4 @@ function demoBadgeUrlsFromTag(badgeTag) {
 
   return urls;
 }
+
