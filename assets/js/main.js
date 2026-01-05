@@ -3,7 +3,7 @@ import { loadConfig } from "./config.js";
 import { applyTheme } from "./theme.js";
 import { applyStyleVars } from "./style.js";
 import { initDebugDom, updateDebugBanner } from "./debug.js";
-import { initRenderDom, addMessage } from "./render.js";
+import { initRenderDom, addMessage, buildMessageHtmlParts } from "./render.js";
 import { loadBadges } from "./badges.js";
 import { loadThirdPartyEmotes } from "./emotes/index.js";
 import { connectIrc } from "./twitch.js";
@@ -119,7 +119,7 @@ function runDemo(cfg) {
 
     // In demo, we don’t have IRC tags; addMessage expects htmlParts already escaped.
     // Emotes will still render because render.js replaces 3P in text.
-    const htmlParts = [escapeHtml(s.text)];
+    const htmlParts = buildMessageHtmlParts(s.text, "");
     const badgeImgs = (cfg.badgeProxy && STATE.badgesReady && badgeTag !== "(none)")
       ? demoBadgeUrlsFromTag(badgeTag)
       : [];

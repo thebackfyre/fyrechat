@@ -19,7 +19,7 @@ export const BASE_DEFAULTS = {
     enabled: true,
     providers: {
       bttv: { enabled: true },
-      "7tv": { enabled: true, baseUrl: "https://api.7tv.app/v3" },
+      "7tv": { enabled: true, baseUrl: "https://7tv.io/v3" },
       ffz: { enabled: true }
     },
     cacheMinutes: 360
