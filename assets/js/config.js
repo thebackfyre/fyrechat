@@ -14,6 +14,7 @@ export const BASE_DEFAULTS = {
   demoBadges: false,
   theme: "glass",
   badgeProxy: "https://twitch-badge-proxy.thebackfyre.workers.dev",
+  idProxy: "https://twitch-badge-proxy.thebackfyre.workers.dev",
   emotes: {
     enabled: true,
     providers: {
@@ -72,7 +73,7 @@ function applyUriOverrides(cfg) {
   if (params.has("demoBadges")) cfg.demoBadges = params.get("demoBadges") === "1";
   if (params.has("badgeProxy")) cfg.badgeProxy = params.get("badgeProxy");
   if (params.has("theme")) cfg.theme = params.get("theme");
-
+  if (params.has("idProxy")) cfg.idProxy = params.get("idProxy");
   // Toggles
   if (params.has("badges") && params.get("badges") === "0") cfg.badgeProxy = "";
   if (params.has("emotes")) {
