@@ -94,100 +94,86 @@ function runDemo(cfg) {
   // -----------------------------
   const demoBadges = [
     "broadcaster/1",
-    "moderator/1",
+    "moderator/1,subscriber/6",
     "subscriber/1",
+    "subscriber/3",
     "subscriber/6",
     "subscriber/12",
-    "subscriber/24",
   ];
 
   // ---------------------------------------------------------
-  // Helper: build Twitch emotesTag by finding token positions
-  // (ASCII-only tokens in demo, so JS indices match fine.)
+  // Twitch emotes: we simulate the IRC emotes tag in demo
   // ---------------------------------------------------------
   const TWITCH_EMOTE_IDS = {
     Kappa: "25",
-    // add more if you want:
+    // Add more Twitch defaults if you want:
     // PogChamp: "88",
   };
 
- function buildTwitchEmotesTag(text) {
-  // CSP-safe: no RegExp constructors, just deterministic string scanning
-  const hitsById = new Map();
+  function buildTwitchEmotesTag(text) {
+    // CSP-safe: no RegExp constructors, just deterministic string scanning
+    const hitsById = new Map();
 
-  for (const [token, id] of Object.entries(TWITCH_EMOTE_IDS)) {
-    const L = token.length;
-    let idx = 0;
+    for (const [token, id] of Object.entries(TWITCH_EMOTE_IDS)) {
+      const L = token.length;
+      let idx = 0;
 
-    while (true) {
-      idx = text.indexOf(token, idx);
-      if (idx === -1) break;
+      while (true) {
+        idx = text.indexOf(token, idx);
+        if (idx === -1) break;
 
-      const before = idx === 0 ? " " : text[idx - 1];
-      const after = idx + L >= text.length ? " " : text[idx + L];
+        const before = idx === 0 ? " " : text[idx - 1];
+        const after = idx + L >= text.length ? " " : text[idx + L];
 
-      // "word boundary" check (good enough for demo tokens like Kappa)
-      const isWordChar = (c) => /[A-Za-z0-9_]/.test(c);
-      if (!isWordChar(before) && !isWordChar(after)) {
-        const start = idx;
-        const end = idx + L - 1;
-        if (!hitsById.has(id)) hitsById.set(id, []);
-        hitsById.get(id).push(`${start}-${end}`);
+        // Word-ish boundary for demo tokens like "Kappa"
+        const isWordChar = (c) => /[A-Za-z0-9_]/.test(c);
+        if (!isWordChar(before) && !isWordChar(after)) {
+          const start = idx;
+          const end = idx + L - 1;
+          if (!hitsById.has(id)) hitsById.set(id, []);
+          hitsById.get(id).push(`${start}-${end}`);
+        }
+
+        idx += L;
       }
-
-      idx += L;
     }
+
+    if (hitsById.size === 0) return "";
+    return [...hitsById.entries()]
+      .map(([id, ranges]) => `${id}:${ranges.join(",")}`)
+      .join("/");
   }
-
-  if (hitsById.size === 0) return "";
-  return [...hitsById.entries()]
-    .map(([id, ranges]) => `${id}:${ranges.join(",")}`)
-    .join("/");
-}
-
 
   // ---------------------------------------------------------
   // DEMO TEST MATRIX (self-identifying labels in text)
-  // Notes:
-  // - Twitch emotes are rendered only when emotesTag is provided.
-  // - 3P emotes are rendered by renderTextWith3PEmotes on plain text chunks.
+  // - Twitch emotes render ONLY when emotesTag is provided
+  // - 3P emotes render via renderTextWith3PEmotes on text segments
   // ---------------------------------------------------------
   const samples = [
-    // Twitch emote(s) — proves buildMessageHtmlParts + emotesTag works like live
     {
       name: "Fyre",
       color: "#9bf",
       text: "[TWITCH] Kappa should render -> Kappa",
       twitchTag: true,
     },
-
-    // 3P single-token checks (global vs channel depends on what’s loaded for that channel)
-    // These are still useful because they validate parsing + substitution pipeline.
     {
       name: "Viewer",
       color: "#fc6",
       text: "[3P BASIC] PepeLaugh monkaS widepeepoHappy catJAM",
       twitchTag: false,
     },
-
-    // Punctuation + wrappers (the stuff that kept breaking)
     {
       name: "ModUser",
       color: "#6f6",
       text: "[3P EDGE] widepeepoHappy! (widepeepoHappy) <widepeepoHappy> widepeepoHappy...",
       twitchTag: false,
     },
-
-    // Mixed line: Twitch + 3P in same message
     {
       name: "Viewer",
       color: "#fc6",
       text: "[MIXED] Kappa PepeLaugh monkaS catJAM widepeepoHappy",
-      twitchTag: true, // includes Kappa
+      twitchTag: true,
     },
-
-    // Collision / ambiguity stress (same token might exist in multiple providers)
-    // This just verifies: token replacement happens, and does NOT break the line.
     {
       name: "Viewer",
       color: "#fc6",
@@ -200,42 +186,14 @@ function runDemo(cfg) {
   setInterval(() => {
     const s = samples[i % samples.length];
 
-    // Rotate badge tiers, but only if demoBadges enabled
     const badgeTag = cfg.demoBadges ? demoBadges[i % demoBadges.length] : "(none)";
     const badgeImgs =
       cfg.badgeProxy && STATE.badgesReady && badgeTag !== "(none)"
         ? demoBadgeUrlsFromTag(badgeTag)
         : [];
 
-    // Build parts like live:
-    // - If twitchTag true, we generate an emotesTag for Kappa positions.
-    // - Otherwise emotesTag is empty and 3P replacement still occurs in text segments.
     const emotesTag = s.twitchTag ? buildTwitchEmotesTag(s.text) : "";
     const htmlParts = buildMessageHtmlParts(s.text, emotesTag);
-
-    addMessage(cfg, s.name, s.color, htmlParts, badgeImgs);
-    i++;
-  }, 1100);
-}
-
-
-  let i = 0;
-  setInterval(() => {
-    const s = samples[i % samples.length];
-    const badgeTag = cfg.demoBadges ? demoBadges[i % demoBadges.length] : "(none)";
-
-    // Demo should behave like live:
-    // - still uses buildMessageHtmlParts()
-    // - and we simulate Twitch's IRC emotes tag so Kappa renders in demo.
-    //
-    // In the string "MIX: Kappa ...", Kappa starts at index 5 and ends at 9.
-    // Twitch emote id for Kappa is 25.
-    const emotesTag = s.text.includes("Kappa") ? "25:5-9" : "";
-    const htmlParts = buildMessageHtmlParts(s.text, emotesTag);
-
-    const badgeImgs = (cfg.badgeProxy && STATE.badgesReady && badgeTag !== "(none)")
-      ? demoBadgeUrlsFromTag(badgeTag)
-      : [];
 
     addMessage(cfg, s.name, s.color, htmlParts, badgeImgs);
     i++;
@@ -259,5 +217,3 @@ function demoBadgeUrlsFromTag(badgeTag) {
 
   return urls;
 }
-
-
