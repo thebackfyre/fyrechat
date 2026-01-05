@@ -6,6 +6,8 @@
   "debug": false,
 
   "badgeProxy": "https://twitch-badge-proxy.thebackfyre.workers.dev",
+  "idProxy": "https://twitch-badge-proxy.thebackfyre.workers.dev",
+
 
   "demo": false,
   "demoBadges": false,
