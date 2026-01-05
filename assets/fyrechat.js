@@ -147,8 +147,7 @@
     }
 
     // 3) Apply URI overrides (also deep merge where appropriate)
-    cfg = applyUriOverrides(cfg, params);
-
+    cfg = applyUriOverrides(cfg);
 
     // Normalize/validate a few critical values
     cfg.channel = String(cfg.channel || "alveussanctuary").toLowerCase();
@@ -165,28 +164,19 @@
     return cfg;
   }
 
-function applyUriOverrides(cfg, params) {
-
-  // ----------------------------
+function applyUriOverrides(cfg) {
   // Simple scalar overrides
-  // ----------------------------
   if (params.has("ch")) cfg.channel = params.get("ch");
-  if (params.has("channel")) cfg.channel = params.get("channel"); // alias
-
   if (params.has("max")) cfg.max = Number(params.get("max"));
   if (params.has("ttl")) cfg.ttl = Number(params.get("ttl"));
   if (params.has("fade")) cfg.fade = Number(params.get("fade"));
-
   if (params.has("debug")) cfg.debug = params.get("debug") === "1";
   if (params.has("demo")) cfg.demo = params.get("demo") === "1";
   if (params.has("demoBadges")) cfg.demoBadges = params.get("demoBadges") === "1";
-
   if (params.has("badgeProxy")) cfg.badgeProxy = params.get("badgeProxy");
   if (params.has("theme")) cfg.theme = params.get("theme");
 
-  // ----------------------------
   // Feature toggles
-  // ----------------------------
   // badges=0 or badges=1
   if (params.has("badges")) {
     const on = params.get("badges") === "1";
@@ -200,23 +190,19 @@ function applyUriOverrides(cfg, params) {
     cfg.emotes.enabled = on;
   }
 
-  // ----------------------------
   // Provider toggles (optional)
-  // ----------------------------
   if (params.has("bttv")) {
     cfg.emotes = cfg.emotes || {};
     cfg.emotes.providers = cfg.emotes.providers || {};
     cfg.emotes.providers.bttv = cfg.emotes.providers.bttv || {};
     cfg.emotes.providers.bttv.enabled = params.get("bttv") === "1";
   }
-
   if (params.has("7tv")) {
     cfg.emotes = cfg.emotes || {};
     cfg.emotes.providers = cfg.emotes.providers || {};
     cfg.emotes.providers["7tv"] = cfg.emotes.providers["7tv"] || {};
     cfg.emotes.providers["7tv"].enabled = params.get("7tv") === "1";
   }
-
   if (params.has("ffz")) {
     cfg.emotes = cfg.emotes || {};
     cfg.emotes.providers = cfg.emotes.providers || {};
@@ -225,51 +211,65 @@ function applyUriOverrides(cfg, params) {
   }
 
   // ---------------------------------------------------------
-  // Style URI overrides -> cfg.style (so applyStyleVars works)
-  // Supports:
-  //   &badgeSize=18px
+  // NEW: Style URI overrides -> cfg.style (so applyStyleVars works)
+  // Example:
+  //   &badgeSize=18px&badgeGap=6px&emoteSize=22px&emotePadX=2px
+  // Optional nested aliases:
   //   &style.badgeSize=18px
   // ---------------------------------------------------------
   cfg.style = cfg.style || {};
 
-  // Prefer non-nested key first, fall back to style.*
-  const getStyleVal = (key) => {
-    if (params.has(key)) {
-      const v = params.get(key);
-      return (v === null || v === "") ? null : v;
-    }
-    const nestedKey = `style.${key}`;
-    if (params.has(nestedKey)) {
-      const v = params.get(nestedKey);
-      return (v === null || v === "") ? null : v;
-    }
-    return null;
-  };
-
-  const setStyle = (key) => {
-    const v = getStyleVal(key);
-    if (v !== null) cfg.style[key] = v;
+  const get = (k) => {
+    const v = params.get(k);
+    return (v === null || v === "") ? null : v;
   };
 
   // Badge styling
-  setStyle("badgeSize");
-  setStyle("badgeGap");
-  setStyle("badgePadRight");
+  if (params.has("badgeSize") || params.has("style.badgeSize")) {
+    cfg.style.badgeSize = get("badgeSize") ?? get("style.badgeSize") ?? cfg.style.badgeSize;
+  }
+  if (params.has("badgeGap") || params.has("style.badgeGap")) {
+    cfg.style.badgeGap = get("badgeGap") ?? get("style.badgeGap") ?? cfg.style.badgeGap;
+  }
+  if (params.has("badgePadRight") || params.has("style.badgePadRight")) {
+    cfg.style.badgePadRight = get("badgePadRight") ?? get("style.badgePadRight") ?? cfg.style.badgePadRight;
+  }
 
   // Emote styling
-  setStyle("emoteSize");
-  setStyle("emoteBaseline");
-  setStyle("emotePadX");
-
-  // Typography styling
-  setStyle("nameSize");
-  setStyle("nameWeight");
-  setStyle("textSize");
-  setStyle("lineHeight");
+  if (params.has("emoteSize") || params.has("style.emoteSize")) {
+    cfg.style.emoteSize = get("emoteSize") ?? get("style.emoteSize") ?? cfg.style.emoteSize;
+  }
+  if (params.has("emoteBaseline") || params.has("style.emoteBaseline")) {
+    cfg.style.emoteBaseline = get("emoteBaseline") ?? get("style.emoteBaseline") ?? cfg.style.emoteBaseline;
+  }
+  if (params.has("emotePadX") || params.has("style.emotePadX")) {
+    cfg.style.emotePadX = get("emotePadX") ?? get("style.emotePadX") ?? cfg.style.emotePadX;
+  }
 
   return cfg;
 }
 
+
+  function structuredCloneSafe(obj) {
+    try { return structuredClone(obj); } catch { return JSON.parse(JSON.stringify(obj)); }
+  }
+
+  function deepMerge(target, source) {
+    if (!isObj(target) || !isObj(source)) return source;
+
+    const out = Array.isArray(target) ? target.slice() : { ...target };
+
+    for (const [k, v] of Object.entries(source)) {
+      if (Array.isArray(v)) {
+        out[k] = v.slice();
+      } else if (isObj(v)) {
+        out[k] = deepMerge(isObj(out[k]) ? out[k] : {}, v);
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
 
   function isObj(v) {
     return v && typeof v === "object" && !Array.isArray(v);
@@ -296,8 +296,6 @@ function applyUriOverrides(cfg, params) {
 // Style Configs
 // =========================================================
 
-
-
 function applyStyleVars(cfg) {
   const s = cfg.style || {};
   const root = document.documentElement.style;
@@ -314,12 +312,6 @@ function applyStyleVars(cfg) {
   set("--emoteSize", s.emoteSize);
   set("--emoteBaseline", s.emoteBaseline);
   set("--emotePadX", s.emotePadX);
-
-  set("--nameSize", s.nameSize);
-  set("--nameWeight", s.nameWeight);
-  set("--textSize", s.textSize);
-  set("--lineHeight", s.lineHeight);
-
 }
 
 
@@ -974,16 +966,13 @@ function updateDebugBanner(cfg, statusText) {
 
   if (s.badgeSize) styleBits.push(`badge=${s.badgeSize}`);
   if (s.emoteSize) styleBits.push(`emote=${s.emoteSize}`);
-  if (s.nameSize) styleBits.push(`name=${s.nameSize}`);
-  if (s.textSize) styleBits.push(`text=${s.textSize}`);
-  if (s.lineHeight) styleBits.push(`lh=${s.lineHeight}`);
 
   const styleText = styleBits.length
     ? ` | style(${styleBits.join(",")})`
     : "";
 
   $debug.textContent =
-    `${mode} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s` +
+    `${mode} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s}` +
     ` | badges=${badgesOn ? "on" : "off"} | emotes=${emotesOn ? "on" : "off"}` +
     ` | badgeSets=${badgeSets}, 3pEmotes=${emoteCount}` +
     (providerFlags ? ` [${providerFlags}]` : "") +
