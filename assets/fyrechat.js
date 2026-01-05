@@ -88,6 +88,8 @@
     STATE.cfg = cfg;
 
     applyTheme(cfg);
+    applyStyleVars(cfg);
+
 
     // Debug banner visibility
     if (cfg.debug) {
@@ -243,6 +245,35 @@
     const theme = String(cfg.theme || "glass").toLowerCase();
     themeLink.href = `./assets/themes/${theme}.css`;
   }
+
+
+
+
+// =========================================================
+// Style Configs
+// =========================================================
+
+function applyStyleVars(cfg) {
+  const s = cfg.style || {};
+  const root = document.documentElement.style;
+
+  const set = (name, val) => {
+    if (val === undefined || val === null || val === "") return;
+    root.setProperty(name, String(val));
+  };
+
+  set("--badgeSize", s.badgeSize);
+  set("--badgeGap", s.badgeGap);
+  set("--badgePadRight", s.badgePadRight);
+
+  set("--emoteSize", s.emoteSize);
+  set("--emoteBaseline", s.emoteBaseline);
+  set("--emotePadX", s.emotePadX);
+}
+
+
+
+
 
   // =========================================================
   // Twitch user id resolve (needed for channel badges/emotes)
@@ -860,35 +891,53 @@ function normalizeMaybeProtocolRelative(url) {
     }, 1200);
   }
 
-  // =========================================================
-  // Debug banner
-  // =========================================================
+ // =========================================================
+// Debug banner
+// =========================================================
 
-  function updateDebugBanner(cfg, statusText) {
-    if (!cfg.debug) return;
+function updateDebugBanner(cfg, statusText) {
+  if (!cfg.debug) return;
 
-    const mode = cfg.demo ? "DEMO" : "IRC";
-    const badgesOn = !!cfg.badgeProxy;
-    const emotesOn = !!cfg.emotes?.enabled;
+  const mode = cfg.demo ? "DEMO" : "IRC";
 
-    const badgeSets = (badgesOn && STATE.badgesReady) ? "on" : "off";
-    const badgeErr = STATE.badgeErr ? ` | badgeErr=${STATE.badgeErr}` : "";
-    const idErr = STATE.channelIdErr ? ` | idErr=${STATE.channelIdErr}` : "";
-    const emoteCount = STATE.emoteMap3P ? STATE.emoteMap3P.size : 0;
+  const badgesOn = !!cfg.badgeProxy;
+  const emotesOn = !!cfg.emotes?.enabled;
 
-    $debug.textContent =
-      `${mode} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s` +
-      ` | badges=${badgesOn ? "on" : "off"} | emotes=${emotesOn ? "on" : "off"}` +
-      ` | badgeSets=${badgeSets}, 3pEmotes=${emoteCount}` +
-      (statusText ? ` | ${statusText}` : "") +
-      badgeErr + idErr;
-  }
+  const badgeSets = (badgesOn && STATE.badgesReady) ? "on" : "off";
+  const badgeErr = STATE.badgeErr ? ` | badgeErr=${STATE.badgeErr}` : "";
+  const idErr = STATE.channelIdErr ? ` | idErr=${STATE.channelIdErr}` : "";
 
-  function showDebug(text, forceShow = false) {
-    if (!STATE.cfg?.debug && !forceShow) return;
-    $debug.style.display = "block";
-    $debug.textContent = text;
-  }
+  const emoteCount = STATE.emoteMap3P ? STATE.emoteMap3P.size : 0;
+
+  // --- Emote provider flags ---
+  const providers = cfg.emotes?.providers || {};
+  const providerFlags = [
+    providers.bttv?.enabled ? "BTTV" : null,
+    providers["7tv"]?.enabled ? "7TV" : null,
+    providers.ffz?.enabled ? "FFZ" : null
+  ].filter(Boolean).join(",");
+
+  // --- Style visibility (only show if overridden) ---
+  const s = cfg.style || {};
+  const styleBits = [];
+
+  if (s.badgeSize) styleBits.push(`badge=${s.badgeSize}`);
+  if (s.emoteSize) styleBits.push(`emote=${s.emoteSize}`);
+
+  const styleText = styleBits.length
+    ? ` | style(${styleBits.join(",")})`
+    : "";
+
+  $debug.textContent =
+    `${mode} | ch=${cfg.channel} | max=${cfg.max} | ttl=${cfg.ttl}s | fade=${cfg.fade}s}` +
+    ` | badges=${badgesOn ? "on" : "off"} | emotes=${emotesOn ? "on" : "off"}` +
+    ` | badgeSets=${badgeSets}, 3pEmotes=${emoteCount}` +
+    (providerFlags ? ` [${providerFlags}]` : "") +
+    styleText +
+    (statusText ? ` | ${statusText}` : "") +
+    badgeErr + idErr;
+}
+
 
   // =========================================================
   // Utilities
