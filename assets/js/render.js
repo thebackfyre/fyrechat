@@ -117,8 +117,9 @@ export function renderTextWith3PEmotes(rawText) {
   const TRAIL_PUNCT = /[!?.,:;~]+$/;
 
   function peelToken(tok) {
-    const LEFT_SEQ = ["(", "[", "{", "&lt;", '"', "&#039;"];
-    const RIGHT_SEQ = [")", "]", "}", "&gt;", '"', "&#039;"];
+const LEFT_SEQ = ["(", "[", "{", "<", "&lt;", '"', "&#039;"];
+const RIGHT_SEQ = [")", "]", "}", ">", "&gt;", '"', "&#039;"];
+
 
     let left = "";
     let right = "";
