@@ -1,26 +1,47 @@
 import { STATE } from "../state.js";
 import { fetchJson } from "../utils.js";
 
-export async function loadBTTV(cfg) {
-  const globalUrl = "https://api.betterttv.net/3/cached/emotes/global";
-  const global = await fetchJson(globalUrl);
+function add(code, url) {
+  if (!code || !url) return;
+  STATE.emoteMap3P.set(code, { url, provider: "bttv" });
+  STATE.emoteMap3P.set(String(code).toLowerCase(), { url, provider: "bttv" }); // optional case-insensitive
+}
 
-  for (const e of Array.isArray(global) ? global : []) {
-    if (!e?.code || !e?.id) continue;
-    STATE.emoteMap3P.set(e.code, { url: `https://cdn.betterttv.net/emote/${e.id}/1x`, provider: "bttv" });
+function cdnUrl(id) {
+  // 3x is a good default for readability
+  return `https://cdn.betterttv.net/emote/${id}/3x`;
+}
+
+export async function loadBTTV(cfg) {
+  const baseUrl =
+    (cfg?.emotes?.providers?.bttv?.baseUrl) ||
+    "https://api.betterttv.net/3";
+
+  // 1) Global emotes
+  try {
+    const global = await fetchJson(`${baseUrl}/cached/emotes/global`, { cache: "no-store" });
+    for (const e of (global || [])) {
+      if (e?.code && e?.id) add(e.code, cdnUrl(e.id));
+    }
+  } catch (e) {
+    console.warn("BTTV global load failed:", e);
   }
 
-  if (STATE.channelId) {
-    const chanUrl = `https://api.betterttv.net/3/cached/users/twitch/${encodeURIComponent(STATE.channelId)}`;
-    const data = await fetchJson(chanUrl);
+  // 2) Channel emotes (THIS is where widepeepoHappy often lives)
+  // BTTV expects Twitch User ID
+  if (!STATE.channelId) return;
 
-    const all = []
-      .concat(Array.isArray(data?.channelEmotes) ? data.channelEmotes : [])
-      .concat(Array.isArray(data?.sharedEmotes) ? data.sharedEmotes : []);
+  try {
+    const user = await fetchJson(`${baseUrl}/cached/users/twitch/${encodeURIComponent(STATE.channelId)}`, { cache: "no-store" });
 
-    for (const e of all) {
-      if (!e?.code || !e?.id) continue;
-      STATE.emoteMap3P.set(e.code, { url: `https://cdn.betterttv.net/emote/${e.id}/1x`, provider: "bttv" });
+    // BTTV user payload: { channelEmotes: [], sharedEmotes: [] }
+    const channelEmotes = Array.isArray(user?.channelEmotes) ? user.channelEmotes : [];
+    const sharedEmotes = Array.isArray(user?.sharedEmotes) ? user.sharedEmotes : [];
+
+    for (const e of [...channelEmotes, ...sharedEmotes]) {
+      if (e?.code && e?.id) add(e.code, cdnUrl(e.id));
     }
+  } catch (e) {
+    console.warn("BTTV channel load failed:", e);
   }
 }
