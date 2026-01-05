@@ -147,7 +147,8 @@
     }
 
     // 3) Apply URI overrides (also deep merge where appropriate)
-    cfg = applyUriOverrides(cfg);
+    cfg = applyUriOverrides(cfg, params);
+
 
     // Normalize/validate a few critical values
     cfg.channel = String(cfg.channel || "alveussanctuary").toLowerCase();
@@ -164,7 +165,8 @@
     return cfg;
   }
 
-function applyUriOverrides(cfg) {
+function applyUriOverrides(cfg, params) {
+
   // ----------------------------
   // Simple scalar overrides
   // ----------------------------
