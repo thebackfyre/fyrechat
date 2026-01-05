@@ -97,35 +97,40 @@ export function buildMessageHtmlParts(text, emotesTag) {
 }
 
 export function renderTextWith3PEmotes(rawText) {
-  const escaped = escapeHtml(rawText);
-
   const cfg = STATE.cfg;
 
-  // FIX: support both cfg.emotes === true (boolean) and cfg.emotes.enabled === true (object)
-  const emotesEnabled = (() => {
-    const v = cfg?.emotes;
-    if (v === true) return true;
-    if (v && typeof v === "object") return !!v.enabled;
-    // also tolerate common string forms if you ever pass through raw query values
-    if (v === "1" || v === "true" || v === "on") return true;
-    return false;
-  })();
+  // Support cfg.emotes.enabled and tolerate legacy boolean cfg.emotes
+  const emotesEnabled =
+    cfg?.emotes === true ||
+    (cfg?.emotes && typeof cfg.emotes === "object" && !!cfg.emotes.enabled);
 
-  if (!emotesEnabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
+  // If emotes off or not loaded, just escape and return
+  if (!emotesEnabled || !STATE.emotesReady || !STATE.emoteMap3P || STATE.emoteMap3P.size === 0) {
+    return escapeHtml(rawText);
+  }
 
-  const tokens = escaped.split(/(\s+)/);
+  // Tokenize on whitespace but keep the whitespace tokens
+  const tokens = String(rawText).split(/(\s+)/);
+
+  // punctuation that should stay outside the emote core
   const TRAIL_PUNCT = /[!?.,:;~]+$/;
 
-  function peelToken(tok) {
-const LEFT_SEQ = ["(", "[", "{", "<", "&lt;", '"', "&#039;"];
-const RIGHT_SEQ = [")", "]", "}", ">", "&gt;", '"', "&#039;"];
+  // Peel wrappers on the RAW token (not escaped HTML)
+  function peelTokenRaw(tok) {
+    // Quick path for exact <name> form (THIS is your failing case)
+    const mAngle = tok.match(/^<([^<>]+)>$/);
+    if (mAngle) {
+      return { left: "<", core: mAngle[1], right: ">" };
+    }
 
+    const LEFT_SEQ = ["(", "[", "{", "<", '"', "'"];
+    const RIGHT_SEQ = [")", "]", "}", ">", '"', "'"];
 
     let left = "";
     let right = "";
     let core = tok;
 
-    // peel trailing punctuation first (so &gt; stays attached to core until bracket-peel)
+    // peel trailing punctuation first
     let punct = "";
     const pm = core.match(TRAIL_PUNCT);
     if (pm) {
@@ -161,20 +166,22 @@ const RIGHT_SEQ = [")", "]", "}", ">", "&gt;", '"', "&#039;"];
   }
 
   const out = tokens.map((tok) => {
-    if (!tok || /^\s+$/.test(tok)) return tok;
+    if (!tok) return tok;
 
-    const { left, core, right } = peelToken(tok);
-    if (!core) return tok;
+    // whitespace stays as-is (safe)
+    if (/^\s+$/.test(tok)) return tok;
 
-    // primary lookup
+    const { left, core, right } = peelTokenRaw(tok);
+    if (!core) return escapeHtml(tok);
+
+    // lookup (try exact, then lower)
     let em = STATE.emoteMap3P.get(core);
-
-    // optional fallback: case-insensitive match if your map stores normalized keys
     if (!em) em = STATE.emoteMap3P.get(core.toLowerCase());
 
-    if (!em) return tok;
+    if (!em) return escapeHtml(tok);
 
-    return `${left}<img class="emote" alt="" src="${escapeAttr(em.url)}">${right}`;
+    // Escape wrappers; emit img for emote
+    return `${escapeHtml(left)}<img class="emote" alt="" src="${escapeAttr(em.url)}">${escapeHtml(right)}`;
   });
 
   return out.join("");
