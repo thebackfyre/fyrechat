@@ -136,21 +136,20 @@ html, body {
 }
 
 .name {
-  font-weight: 800;
-  font-size: calc(var(--fontSize) * 1.02);
+  font-weight: var(--nameWeight, 800);
+  font-size: var(--nameSize, calc(var(--fontSize) * 1.02));
   text-shadow: 0 2px 10px rgba(0,0,0,0.35);
 }
 
-/* Message body */
 .text {
   font-weight: 500;
-  font-size: var(--fontSize);
-  line-height: var(--lineHeight);
+  font-size: var(--textSize, var(--fontSize));
+  line-height: var(--lineHeight, 1.28);
   color: var(--textColor);
   text-shadow: 0 2px 12px rgba(0,0,0,0.35);
   white-space: pre-wrap;
   word-break: break-word;
-  padding-bottom: 2px; /* FIX for overflow */
+  padding-bottom: 1px; /* FIX for overflow */
 }
 
 /* Twitch emote images */
