@@ -164,48 +164,91 @@
     return cfg;
   }
 
-  function applyUriOverrides(cfg) {
-    // Simple scalar overrides
-    if (params.has("ch")) cfg.channel = params.get("ch");
-    if (params.has("max")) cfg.max = Number(params.get("max"));
-    if (params.has("ttl")) cfg.ttl = Number(params.get("ttl"));
-    if (params.has("fade")) cfg.fade = Number(params.get("fade"));
-    if (params.has("debug")) cfg.debug = params.get("debug") === "1";
-    if (params.has("demo")) cfg.demo = params.get("demo") === "1";
-    if (params.has("demoBadges")) cfg.demoBadges = params.get("demoBadges") === "1";
-    if (params.has("badgeProxy")) cfg.badgeProxy = params.get("badgeProxy");
-    if (params.has("theme")) cfg.theme = params.get("theme");
+function applyUriOverrides(cfg) {
+  // Simple scalar overrides
+  if (params.has("ch")) cfg.channel = params.get("ch");
+  if (params.has("max")) cfg.max = Number(params.get("max"));
+  if (params.has("ttl")) cfg.ttl = Number(params.get("ttl"));
+  if (params.has("fade")) cfg.fade = Number(params.get("fade"));
+  if (params.has("debug")) cfg.debug = params.get("debug") === "1";
+  if (params.has("demo")) cfg.demo = params.get("demo") === "1";
+  if (params.has("demoBadges")) cfg.demoBadges = params.get("demoBadges") === "1";
+  if (params.has("badgeProxy")) cfg.badgeProxy = params.get("badgeProxy");
+  if (params.has("theme")) cfg.theme = params.get("theme");
 
-    // Feature toggles
-    // badges=0 or badges=1 (if you want that control later)
-    if (params.has("badges")) {
-      const on = params.get("badges") === "1";
-      // If badges are "off", just blank the proxy so badge loader is skipped
-      if (!on) cfg.badgeProxy = "";
-    }
-
-    if (params.has("emotes")) {
-      const on = params.get("emotes") === "1";
-      cfg.emotes = cfg.emotes || {};
-      cfg.emotes.enabled = on;
-    }
-
-    // Provider toggles (optional)
-    if (params.has("bttv")) {
-      cfg.emotes = cfg.emotes || {};
-      cfg.emotes.providers = cfg.emotes.providers || {};
-      cfg.emotes.providers.bttv = cfg.emotes.providers.bttv || {};
-      cfg.emotes.providers.bttv.enabled = params.get("bttv") === "1";
-    }
-    if (params.has("7tv")) {
-      cfg.emotes = cfg.emotes || {};
-      cfg.emotes.providers = cfg.emotes.providers || {};
-      cfg.emotes.providers["7tv"] = cfg.emotes.providers["7tv"] || {};
-      cfg.emotes.providers["7tv"].enabled = params.get("7tv") === "1";
-    }
-
-    return cfg;
+  // Feature toggles
+  // badges=0 or badges=1
+  if (params.has("badges")) {
+    const on = params.get("badges") === "1";
+    if (!on) cfg.badgeProxy = "";
   }
+
+  // emotes=0 or emotes=1
+  if (params.has("emotes")) {
+    const on = params.get("emotes") === "1";
+    cfg.emotes = cfg.emotes || {};
+    cfg.emotes.enabled = on;
+  }
+
+  // Provider toggles (optional)
+  if (params.has("bttv")) {
+    cfg.emotes = cfg.emotes || {};
+    cfg.emotes.providers = cfg.emotes.providers || {};
+    cfg.emotes.providers.bttv = cfg.emotes.providers.bttv || {};
+    cfg.emotes.providers.bttv.enabled = params.get("bttv") === "1";
+  }
+  if (params.has("7tv")) {
+    cfg.emotes = cfg.emotes || {};
+    cfg.emotes.providers = cfg.emotes.providers || {};
+    cfg.emotes.providers["7tv"] = cfg.emotes.providers["7tv"] || {};
+    cfg.emotes.providers["7tv"].enabled = params.get("7tv") === "1";
+  }
+  if (params.has("ffz")) {
+    cfg.emotes = cfg.emotes || {};
+    cfg.emotes.providers = cfg.emotes.providers || {};
+    cfg.emotes.providers.ffz = cfg.emotes.providers.ffz || {};
+    cfg.emotes.providers.ffz.enabled = params.get("ffz") === "1";
+  }
+
+  // ---------------------------------------------------------
+  // NEW: Style URI overrides -> cfg.style (so applyStyleVars works)
+  // Example:
+  //   &badgeSize=18px&badgeGap=6px&emoteSize=22px&emotePadX=2px
+  // Optional nested aliases:
+  //   &style.badgeSize=18px
+  // ---------------------------------------------------------
+  cfg.style = cfg.style || {};
+
+  const get = (k) => {
+    const v = params.get(k);
+    return (v === null || v === "") ? null : v;
+  };
+
+  // Badge styling
+  if (params.has("badgeSize") || params.has("style.badgeSize")) {
+    cfg.style.badgeSize = get("badgeSize") ?? get("style.badgeSize") ?? cfg.style.badgeSize;
+  }
+  if (params.has("badgeGap") || params.has("style.badgeGap")) {
+    cfg.style.badgeGap = get("badgeGap") ?? get("style.badgeGap") ?? cfg.style.badgeGap;
+  }
+  if (params.has("badgePadRight") || params.has("style.badgePadRight")) {
+    cfg.style.badgePadRight = get("badgePadRight") ?? get("style.badgePadRight") ?? cfg.style.badgePadRight;
+  }
+
+  // Emote styling
+  if (params.has("emoteSize") || params.has("style.emoteSize")) {
+    cfg.style.emoteSize = get("emoteSize") ?? get("style.emoteSize") ?? cfg.style.emoteSize;
+  }
+  if (params.has("emoteBaseline") || params.has("style.emoteBaseline")) {
+    cfg.style.emoteBaseline = get("emoteBaseline") ?? get("style.emoteBaseline") ?? cfg.style.emoteBaseline;
+  }
+  if (params.has("emotePadX") || params.has("style.emotePadX")) {
+    cfg.style.emotePadX = get("emotePadX") ?? get("style.emotePadX") ?? cfg.style.emotePadX;
+  }
+
+  return cfg;
+}
+
 
   function structuredCloneSafe(obj) {
     try { return structuredClone(obj); } catch { return JSON.parse(JSON.stringify(obj)); }
