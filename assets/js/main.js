@@ -7,7 +7,7 @@ import { initRenderDom, addMessage, buildMessageHtmlParts } from "./render.js";
 import { loadBadges } from "./badges.js";
 import { loadThirdPartyEmotes } from "./emotes/index.js";
 import { connectIrc } from "./twitch.js";
-import { fetchJson, escapeHtml } from "./utils.js";
+import { fetchJson } from "./utils.js";
 
 init().catch((e) => {
   console.error("FyreChat init fatal:", e);
@@ -49,16 +49,6 @@ async function resolveChannelId(cfg) {
   }
 
   try {
-    // IMPORTANT:
-    // Your worker already has an endpoint that returns the channel id.
-    // We’ll support multiple common patterns so you don’t have to remember which one:
-    //
-    //  1) /id/<login>
-    //  2) /twitch/id/<login>
-    //  3) /users/<login>
-    //  4) /helix/users?login=<login>  (proxy style)
-    //
-    // We try them in order and accept the first that returns a valid id.
     const login = encodeURIComponent(cfg.channel);
 
     const candidates = [
@@ -98,7 +88,6 @@ async function resolveChannelId(cfg) {
   }
 }
 
-
 function runDemo(cfg) {
   const samples = [
     { name: "Fyre", color: "#9bf", text: "Demo — badges + emotes should render 👋" },
@@ -117,9 +106,15 @@ function runDemo(cfg) {
     const s = samples[i % samples.length];
     const badgeTag = cfg.demoBadges ? demoBadges[i % demoBadges.length] : "(none)";
 
-    // In demo, we don’t have IRC tags; addMessage expects htmlParts already escaped.
-    // Emotes will still render because render.js replaces 3P in text.
-    const htmlParts = buildMessageHtmlParts(s.text, "");
+    // Demo should behave like live:
+    // - still uses buildMessageHtmlParts()
+    // - and we simulate Twitch's IRC emotes tag so Kappa renders in demo.
+    //
+    // In the string "MIX: Kappa ...", Kappa starts at index 5 and ends at 9.
+    // Twitch emote id for Kappa is 25.
+    const emotesTag = s.text.includes("Kappa") ? "25:5-9" : "";
+    const htmlParts = buildMessageHtmlParts(s.text, emotesTag);
+
     const badgeImgs = (cfg.badgeProxy && STATE.badgesReady && badgeTag !== "(none)")
       ? demoBadgeUrlsFromTag(badgeTag)
       : [];
