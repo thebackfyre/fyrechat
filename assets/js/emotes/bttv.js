@@ -1,47 +1,62 @@
 import { STATE } from "../state.js";
-import { fetchJson } from "../utils.js";
+import { fetchJson, stripTrailingSlash } from "../utils.js";
 
-function add(code, url) {
-  if (!code || !url) return;
-  STATE.emoteMap3P.set(code, { url, provider: "bttv" });
-  STATE.emoteMap3P.set(String(code).toLowerCase(), { url, provider: "bttv" }); // optional case-insensitive
+function pickBestFile(files) {
+  if (!Array.isArray(files) || files.length === 0) return null;
+  const prefer = ["4x.webp", "3x.webp", "2x.webp", "1x.webp", "4x", "3x", "2x", "1x"];
+  for (const want of prefer) {
+    const f = files.find(x => String(x?.name || "") === want);
+    if (f) return f;
+  }
+  return files[0] || null;
 }
 
-function cdnUrl(id) {
-  // 3x is a good default for readability
-  return `https://cdn.betterttv.net/emote/${id}/3x`;
+function add7TVSetEmotes(setObj) {
+  const emotes = Array.isArray(setObj?.emotes) ? setObj.emotes : [];
+  for (const item of emotes) {
+    const name = item?.name;
+    const host = item?.data?.host;
+
+    // ✅ 7TV uses host.url, NOT host.uri
+    const hostUrl = host?.url;
+    const files = host?.files;
+
+    if (!name || !hostUrl || !Array.isArray(files) || files.length === 0) continue;
+
+    const file = pickBestFile(files);
+    if (!file?.name) continue;
+
+    const url = `https:${hostUrl}/${file.name}`;
+
+    STATE.emoteMap3P.set(name, { url, provider: "7tv" });
+    STATE.emoteMap3P.set(String(name).toLowerCase(), { url, provider: "7tv" }); // optional
+  }
 }
 
-export async function loadBTTV(cfg) {
-  const baseUrl =
-    (cfg?.emotes?.providers?.bttv?.baseUrl) ||
-    "https://api.betterttv.net/3";
+export async function load7TV(cfg) {
+  const p7 = cfg?.emotes?.providers?.["7tv"] || {};
 
-  // 1) Global emotes
+  // ✅ correct default, even if cfg is missing/malformed
+  const baseUrl = stripTrailingSlash(p7.baseUrl || "https://7tv.io/v3");
+
+  // Global set (optional)
   try {
-    const global = await fetchJson(`${baseUrl}/cached/emotes/global`, { cache: "no-store" });
-    for (const e of (global || [])) {
-      if (e?.code && e?.id) add(e.code, cdnUrl(e.id));
-    }
+    const globalSet = await fetchJson(`${baseUrl}/emote-sets/global`, { cache: "no-store" });
+    add7TVSetEmotes(globalSet);
   } catch (e) {
-    console.warn("BTTV global load failed:", e);
+    console.warn("7TV global load failed:", e);
   }
 
-  // 2) Channel emotes (THIS is where widepeepoHappy often lives)
-  // BTTV expects Twitch User ID
-  if (!STATE.channelId) return;
-
-  try {
-    const user = await fetchJson(`${baseUrl}/cached/users/twitch/${encodeURIComponent(STATE.channelId)}`, { cache: "no-store" });
-
-    // BTTV user payload: { channelEmotes: [], sharedEmotes: [] }
-    const channelEmotes = Array.isArray(user?.channelEmotes) ? user.channelEmotes : [];
-    const sharedEmotes = Array.isArray(user?.sharedEmotes) ? user.sharedEmotes : [];
-
-    for (const e of [...channelEmotes, ...sharedEmotes]) {
-      if (e?.code && e?.id) add(e.code, cdnUrl(e.id));
+  // Channel set (where widepeepoHappy would normally come from)
+  if (STATE.channelId) {
+    try {
+      const user = await fetchJson(
+        `${baseUrl}/users/twitch/${encodeURIComponent(STATE.channelId)}`,
+        { cache: "no-store" }
+      );
+      if (user?.emote_set) add7TVSetEmotes(user.emote_set);
+    } catch (e) {
+      console.warn("7TV channel load failed:", e);
     }
-  } catch (e) {
-    console.warn("BTTV channel load failed:", e);
   }
 }
