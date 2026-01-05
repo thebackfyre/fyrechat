@@ -83,7 +83,9 @@ export function buildMessageHtmlParts(text, emotesTag) {
     if (r.start > cursor) {
       parts.push(renderTextWith3PEmotes(text.slice(cursor, r.start)));
     }
-    parts.push(`<img class="emote" alt="" src="https://static-cdn.jtvnw.net/emoticons/v2/${r.id}/default/dark/1.0">`);
+    parts.push(
+      `<img class="emote" alt="" src="https://static-cdn.jtvnw.net/emoticons/v2/${r.id}/default/dark/1.0">`
+    );
     cursor = r.end + 1;
   }
 
@@ -98,7 +100,18 @@ export function renderTextWith3PEmotes(rawText) {
   const escaped = escapeHtml(rawText);
 
   const cfg = STATE.cfg;
-  if (!cfg?.emotes?.enabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
+
+  // FIX: support both cfg.emotes === true (boolean) and cfg.emotes.enabled === true (object)
+  const emotesEnabled = (() => {
+    const v = cfg?.emotes;
+    if (v === true) return true;
+    if (v && typeof v === "object") return !!v.enabled;
+    // also tolerate common string forms if you ever pass through raw query values
+    if (v === "1" || v === "true" || v === "on") return true;
+    return false;
+  })();
+
+  if (!emotesEnabled || !STATE.emotesReady || STATE.emoteMap3P.size === 0) return escaped;
 
   const tokens = escaped.split(/(\s+)/);
   const TRAIL_PUNCT = /[!?.,:;~]+$/;
@@ -111,6 +124,7 @@ export function renderTextWith3PEmotes(rawText) {
     let right = "";
     let core = tok;
 
+    // peel trailing punctuation first (so &gt; stays attached to core until bracket-peel)
     let punct = "";
     const pm = core.match(TRAIL_PUNCT);
     if (pm) {
@@ -151,7 +165,12 @@ export function renderTextWith3PEmotes(rawText) {
     const { left, core, right } = peelToken(tok);
     if (!core) return tok;
 
-    const em = STATE.emoteMap3P.get(core);
+    // primary lookup
+    let em = STATE.emoteMap3P.get(core);
+
+    // optional fallback: case-insensitive match if your map stores normalized keys
+    if (!em) em = STATE.emoteMap3P.get(core.toLowerCase());
+
     if (!em) return tok;
 
     return `${left}<img class="emote" alt="" src="${escapeAttr(em.url)}">${right}`;
