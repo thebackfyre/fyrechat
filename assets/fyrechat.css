@@ -40,39 +40,28 @@
   /* ======================================================================
      9-SLICE FRAME (Method A: border-image)
      ----------------------------------------------------------------------
-     How it works:
-       - When enabled, the bubble uses border-image (9-slice).
-       - The PNG defines corners/edges. CSS stretches edge slices to fit.
-     What you change later:
-       - Drop in your PNG and set --frameUrl + --frameSlice.
+     Runtime-correct path (per your confirmation):
+     ./themes/default/bubble-outline.png
+     (relative to the CSS file being loaded)
      ====================================================================== */
 
-  --frameEnabled: 1; /* 0 = OFF (use normal border), 1 = ON (use 9-slice) */
-
-  /* Set this to your asset (you can leave it blank until ready) */
+  --frameEnabled: 1; /* 0 = OFF (normal border), 1 = ON (9-slice frame) */
   --frameUrl: url("./themes/default/bubble-outline.png");
 
-  /* The border thickness the frame occupies (match your art stroke intent) */
+  /* Match your intent from Krita */
   --frameBorder: 10px;
 
-  /* Slice value (most important knob)
-     - If your PNG is tightly-cropped to the frame: start 110–140
-     - If your PNG includes outer transparent padding: you'll need higher slices
-       OR (recommended) crop export later.
-  */
+  /* Start here; tune 120–180 depending on the PNG */
   --frameSlice: 140;
 
-  /* repeat behavior:
-     - stretch = no tiling (safe default)
-     - round   = tiles edge to fit evenly (can create "ticks" if art isn't clean)
-  */
+  /* Safe default (prevents tiling artifacts). Try round later if desired. */
   --frameRepeat: stretch;
 
-  /* Inner padding (content spacing) */
+  /* Content padding controls */
   --bubblePadY: 12px;
   --bubblePadX: 14px;
 
-  /* Extra padding when frame is enabled (optional) */
+  /* Extra padding when frame is enabled (keeps text away from frame) */
   --framePadY: 6px;
   --framePadX: 8px;
 }
@@ -121,25 +110,37 @@ html, body {
   pointer-events: none;
 }
 
-/* ==========================================================================
-   BUBBLE (BASE)
-   ========================================================================= */
+/* One bubble */
 .msg {
   display: flex;
   flex-direction: column;
   gap: 6px;
 
-  /* Padding (base) */
-  padding: var(--bubblePadY) var(--bubblePadX);
+  /* Base padding + extra padding when frame is enabled */
+  padding:
+    calc(var(--bubblePadY) + (var(--frameEnabled) * var(--framePadY)))
+    calc(var(--bubblePadX) + (var(--frameEnabled) * var(--framePadX)));
 
-  /* Base glass look */
+  /* Background + depth */
   background: var(--bubbleBg);
-  border-radius: var(--radius);
-  border: 1px solid var(--bubbleBorder);
   box-shadow: var(--shadow);
 
   backdrop-filter: blur(var(--blur));
   -webkit-backdrop-filter: blur(var(--blur));
+
+  /* OFF state (normal border + radius) */
+  border-radius: calc((1 - var(--frameEnabled)) * var(--radius));
+  border: calc((1 - var(--frameEnabled)) * 1px) solid var(--bubbleBorder);
+
+  /* ON state (9-slice) */
+  border-style: solid;
+  border-width: calc(var(--frameEnabled) * var(--frameBorder));
+
+  border-image-source: var(--frameUrl);
+  border-image-slice: var(--frameSlice);
+  border-image-width: var(--frameBorder); /* keep matched */
+  border-image-outset: 0;
+  border-image-repeat: var(--frameRepeat);
 
   opacity: 0;
   transform: translateY(12px);
@@ -158,48 +159,6 @@ html, body {
 
 @keyframes out {
   to { opacity: 0; transform: translateY(var(--exitShift)); }
-}
-
-/* ==========================================================================
-   BUBBLE (9-SLICE OVERRIDE)
-   - This block is written so enabling/disabling is zero rework.
-   - When enabled:
-       * Removes normal border + radius (border-image ignores radius)
-       * Applies border-image frame
-       * Adds extra padding so content doesn’t collide with the frame
-   ========================================================================= */
-
-/* When frame is enabled, kill the old border so you don't see "double borders" */
-.msg {
-  /* border-image ignores border-radius; corners must be baked into the PNG */
-  border-radius: calc((1 - var(--frameEnabled)) * var(--radius));
-}
-
-/* Use @supports to ensure graceful fallback if something is odd in a browser */
-@supports (border-image-source: url("")) {
-  .msg {
-    /* Normal border remains when disabled */
-    border: calc((1 - var(--frameEnabled)) * 1px) solid var(--bubbleBorder);
-
-    /* When enabled, switch to border-image */
-    border-style: solid;
-    border-width: calc(var(--frameEnabled) * var(--frameBorder));
-    border-image-source: var(--frameUrl);
-    border-image-slice: var(--frameSlice);
-    border-image-width: var(--frameBorder);
-    border-image-outset: 0;
-    border-image-repeat: var(--frameRepeat);
-
-    /* If enabled, we don't want the normal 1px border contributing */
-    /* (border shorthand above takes care of OFF state; ON state uses border-image) */
-  }
-
-  /* Extra padding only when enabled */
-  .msg {
-    padding:
-      calc(var(--bubblePadY) + (var(--frameEnabled) * var(--framePadY)))
-      calc(var(--bubblePadX) + (var(--frameEnabled) * var(--framePadX)));
-  }
 }
 
 /* Top row: badges + name */
@@ -243,4 +202,3 @@ html, body {
   margin-right: var(--badgeGap);
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
 }
-
