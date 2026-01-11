@@ -47,7 +47,7 @@
   --bubbleSkinEnabled: 1; /* 0 = off (use normal border), 1 = on (use PNG skin) */
 
   /* Asset path (relative to fyrechat.css location) */
-  --bubbleSkinUrl: url("./assets/themes/default/bubble-outline.png");
+  --bubbleSkinUrl: url("./themes/default/bubble-outline.png");
 
   /* Hex-driven color for the frame */
   --bubbleSkinColor: #00AEEF;
@@ -215,3 +215,4 @@ s
   margin-right: var(--badgeGap);
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
 }
+
