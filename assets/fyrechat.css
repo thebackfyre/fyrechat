@@ -14,7 +14,7 @@
   --fontSize: 18px;
   --lineHeight: 1.28;
 
-  /* Bubble look (existing system) */
+  /* Bubble look (base) */
   --bubbleBg: rgba(0,0,0,0.58);
   --bubbleBorder: rgba(255,255,255,0.10);
   --textColor: rgba(255,255,255,0.95);
@@ -37,30 +37,44 @@
   --emoteBaseline: -0.25em;
   --emotePadX: 2px;
 
-  /* ==========================================================================
-     PHASE 1: BUBBLE SKIN (PNG BORDER-IMAGE FRAME)
-     - Put your exported asset here:
-       assets/themes/default/bubble-outline.png
-     - Set --bubbleSkinEnabled: 1 to enable.
-     ========================================================================== */
+  /* ======================================================================
+     9-SLICE FRAME (Method A: border-image)
+     ----------------------------------------------------------------------
+     How it works:
+       - When enabled, the bubble uses border-image (9-slice).
+       - The PNG defines corners/edges. CSS stretches edge slices to fit.
+     What you change later:
+       - Drop in your PNG and set --frameUrl + --frameSlice.
+     ====================================================================== */
 
+  --frameEnabled: 1; /* 0 = OFF (use normal border), 1 = ON (use 9-slice) */
 
-  --bubbleSkinEnabled: 1; /* 0=off, 1=on */
-  --bubbleSkinUrl: url("./themes/default/bubble-outline.png");
+  /* Set this to your asset (you can leave it blank until ready) */
+  --frameUrl: url("./assets/themes/default/bubble-outline.png");
 
-  /* Frame tint (works because PNG is white) */
-  --bubbleSkinColor: #00AEEF;
+  /* The border thickness the frame occupies (match your art stroke intent) */
+  --frameBorder: 10px;
 
-  /* Geometry */
-  --bubbleSkinBorderWidth: 10px;
-  --bubbleSkinSlice: 140;       /* start at 140 to reduce “weird border” artifacts */
-  --bubbleSkinRepeat: round;    /* round usually looks cleaner than stretch */
-  
-  /* Background opacity control */
-  --bubbleBgAlpha: 0.35;        /* tweak fast */
-  --bubbleBg: rgba(0,0,0,var(--bubbleBgAlpha));
+  /* Slice value (most important knob)
+     - If your PNG is tightly-cropped to the frame: start 110–140
+     - If your PNG includes outer transparent padding: you'll need higher slices
+       OR (recommended) crop export later.
+  */
+  --frameSlice: 140;
 
-   
+  /* repeat behavior:
+     - stretch = no tiling (safe default)
+     - round   = tiles edge to fit evenly (can create "ticks" if art isn't clean)
+  */
+  --frameRepeat: stretch;
+
+  /* Inner padding (content spacing) */
+  --bubblePadY: 12px;
+  --bubblePadX: 14px;
+
+  /* Extra padding when frame is enabled (optional) */
+  --framePadY: 6px;
+  --framePadX: 8px;
 }
 
 html, body {
@@ -107,73 +121,31 @@ html, body {
   pointer-events: none;
 }
 
-/* One bubble */
+/* ==========================================================================
+   BUBBLE (BASE)
+   ========================================================================= */
 .msg {
   display: flex;
   flex-direction: column;
   gap: 6px;
 
-  /* Padding: slightly larger to account for the frame */
-  padding: 18px 22px;
+  /* Padding (base) */
+  padding: var(--bubblePadY) var(--bubblePadX);
 
-  /* Glass background */
+  /* Base glass look */
   background: var(--bubbleBg);
+  border-radius: var(--radius);
+  border: 1px solid var(--bubbleBorder);
   box-shadow: var(--shadow);
 
   backdrop-filter: blur(var(--blur));
   -webkit-backdrop-filter: blur(var(--blur));
 
-  /* IMPORTANT: remove classic border + radius when using border-image */
-  border: none;
-  border-radius: 0;
-
-  /* PNG frame (9-slice) */
-  border-style: solid;
-  border-width: calc(var(--bubbleSkinEnabled) * var(--bubbleSkinBorderWidth));
-  border-color: var(--bubbleSkinColor);
-
-  border-image-source: var(--bubbleSkinUrl);
-  border-image-slice: var(--bubbleSkinSlice);
-  border-image-width: var(--bubbleSkinBorderWidth); /* MUST match border-width */
-  border-image-outset: 0;
-  border-image-repeat: var(--bubbleSkinRepeat);
-
   opacity: 0;
   transform: translateY(12px);
   animation: in var(--enterMs) ease-out forwards;
 
-  overflow: visible; /* keeps shadows/text safe */
-}
-
-
-/* ==========================================================================
-   PHASE 1 SKIN OVERRIDE
-   - When enabled, replace the normal border with border-image.
-   - Color stays hex-driven via border-color.
-   ========================================================================== */
-.msg {
-  /* Toggle system: off by default unless enabled */
-  border-style: solid;
-  border-width: calc(var(--bubbleSkinEnabled) * var(--bubbleSkinBorderWidth));
-  border-color: var(--bubbleSkinColor);
-
-  /* Apply the 9-slice image only when enabled (var still resolves either way) */
-  border-image-source: var(--bubbleSkinUrl);
-  border-image-slice: var(--bubbleSkinSlice);
-  border-image-repeat: var(--bubbleSkinRepeat);
-
-  /*
-    IMPORTANT:
-    border-image ignores border-radius.
-    The rounded corners come from the PNG itself.
-    So keep border-radius for OFF state; PNG handles ON state.
-  */
-}
-
-/* If you want slightly more inner padding when the frame is enabled */
-.msg {
-  padding: calc(12px + (var(--bubbleSkinEnabled) * 6px))
-           calc(14px + (var(--bubbleSkinEnabled) * 8px));
+  overflow: visible; /* prevents clipping during rapid chat */
 }
 
 @keyframes in {
@@ -186,6 +158,48 @@ html, body {
 
 @keyframes out {
   to { opacity: 0; transform: translateY(var(--exitShift)); }
+}
+
+/* ==========================================================================
+   BUBBLE (9-SLICE OVERRIDE)
+   - This block is written so enabling/disabling is zero rework.
+   - When enabled:
+       * Removes normal border + radius (border-image ignores radius)
+       * Applies border-image frame
+       * Adds extra padding so content doesn’t collide with the frame
+   ========================================================================= */
+
+/* When frame is enabled, kill the old border so you don't see "double borders" */
+.msg {
+  /* border-image ignores border-radius; corners must be baked into the PNG */
+  border-radius: calc((1 - var(--frameEnabled)) * var(--radius));
+}
+
+/* Use @supports to ensure graceful fallback if something is odd in a browser */
+@supports (border-image-source: url("")) {
+  .msg {
+    /* Normal border remains when disabled */
+    border: calc((1 - var(--frameEnabled)) * 1px) solid var(--bubbleBorder);
+
+    /* When enabled, switch to border-image */
+    border-style: solid;
+    border-width: calc(var(--frameEnabled) * var(--frameBorder));
+    border-image-source: var(--frameUrl);
+    border-image-slice: var(--frameSlice);
+    border-image-width: var(--frameBorder);
+    border-image-outset: 0;
+    border-image-repeat: var(--frameRepeat);
+
+    /* If enabled, we don't want the normal 1px border contributing */
+    /* (border shorthand above takes care of OFF state; ON state uses border-image) */
+  }
+
+  /* Extra padding only when enabled */
+  .msg {
+    padding:
+      calc(var(--bubblePadY) + (var(--frameEnabled) * var(--framePadY)))
+      calc(var(--bubblePadX) + (var(--frameEnabled) * var(--framePadX)));
+  }
 }
 
 /* Top row: badges + name */
@@ -201,7 +215,6 @@ html, body {
   font-weight: var(--nameWeight, 800);
   font-size: var(--nameSize, calc(var(--fontSize) * 1.02));
   text-shadow: 0 2px 10px rgba(0,0,0,0.35);
-s
 }
 
 .text {
@@ -212,7 +225,7 @@ s
   text-shadow: 0 2px 12px rgba(0,0,0,0.35);
   white-space: pre-wrap;
   word-break: break-word;
-  padding-bottom: 1px; /* FIX for overflow */
+  padding-bottom: 1px;
 }
 
 /* Twitch emote images */
@@ -230,5 +243,3 @@ s
   margin-right: var(--badgeGap);
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
 }
-
-
