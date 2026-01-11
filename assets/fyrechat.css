@@ -1,4 +1,4 @@
-/* ==========================================================================
+/* ========================================================================== 
    FYRECHAT BASE STYLES
    - All customization flows through CSS variables.
    - Themes can override these variables in separate CSS files.
@@ -14,7 +14,7 @@
   --fontSize: 18px;
   --lineHeight: 1.28;
 
-  /* Bubble look */
+  /* Bubble look (existing system) */
   --bubbleBg: rgba(0,0,0,0.58);
   --bubbleBorder: rgba(255,255,255,0.10);
   --textColor: rgba(255,255,255,0.95);
@@ -30,21 +30,36 @@
   /* Badges */
   --badgeSize: 1.15em;
   --badgeGap: 6px;
+  --badgePadRight: 6px;
 
   /* Emotes */
   --emoteSize: 1.25em;
+  --emoteBaseline: -0.25em;
+  --emotePadX: 2px;
 
-  /* Badge controls */
-  --badgeSize: 1.15em;         /* image height */
-  --badgeGap: 6px;             /* space between badges */
-  --badgePadRight: 6px;        /* space between last badge and name */
+  /* ==========================================================================
+     PHASE 1: BUBBLE SKIN (PNG BORDER-IMAGE FRAME)
+     - Put your exported asset here:
+       assets/themes/default/bubble-outline.png
+     - Set --bubbleSkinEnabled: 1 to enable.
+     ========================================================================== */
 
-  /* Emote controls */
-  --emoteSize: 1.25em;         /* image height */
-  --emoteBaseline: -0.25em;    /* vertical align tweak */
-  --emotePadX: 2px;            /* left/right padding around emotes */
+  --bubbleSkinEnabled: 1; /* 0 = off (use normal border), 1 = on (use PNG skin) */
 
+  /* Asset path (relative to fyrechat.css location) */
+  --bubbleSkinUrl: url("./assets/themes/default/bubble-outline.png");
 
+  /* Hex-driven color for the frame */
+  --bubbleSkinColor: #00AEEF;
+
+  /* Match Krita outline stroke */
+  --bubbleSkinBorderWidth: 10px;
+
+  /* 9-slice tuning (for your 1600x900 asset, r=110, stroke=10) */
+  --bubbleSkinSlice: 120;
+
+  /* How edges scale */
+  --bubbleSkinRepeat: stretch; /* try: round */
 }
 
 html, body {
@@ -96,9 +111,12 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 14px;
-  border-radius: var(--radius);
 
+  /* Keep your current padding; adjust later if you want */
+  padding: 12px 14px;
+
+  /* Default (old) look still exists */
+  border-radius: var(--radius);
   background: var(--bubbleBg);
   border: 1px solid var(--bubbleBorder);
   box-shadow: var(--shadow);
@@ -110,8 +128,37 @@ html, body {
   transform: translateY(12px);
   animation: in var(--enterMs) ease-out forwards;
 
-  /* overflow: hidden;*/
   overflow: visible; /* FIX: prevents text/shadow from being clipped during rapid chat */
+}
+
+/* ==========================================================================
+   PHASE 1 SKIN OVERRIDE
+   - When enabled, replace the normal border with border-image.
+   - Color stays hex-driven via border-color.
+   ========================================================================== */
+.msg {
+  /* Toggle system: off by default unless enabled */
+  border-style: solid;
+  border-width: calc(var(--bubbleSkinEnabled) * var(--bubbleSkinBorderWidth));
+  border-color: var(--bubbleSkinColor);
+
+  /* Apply the 9-slice image only when enabled (var still resolves either way) */
+  border-image-source: var(--bubbleSkinUrl);
+  border-image-slice: var(--bubbleSkinSlice);
+  border-image-repeat: var(--bubbleSkinRepeat);
+
+  /*
+    IMPORTANT:
+    border-image ignores border-radius.
+    The rounded corners come from the PNG itself.
+    So keep border-radius for OFF state; PNG handles ON state.
+  */
+}
+
+/* If you want slightly more inner padding when the frame is enabled */
+.msg {
+  padding: calc(12px + (var(--bubbleSkinEnabled) * 6px))
+           calc(14px + (var(--bubbleSkinEnabled) * 8px));
 }
 
 @keyframes in {
@@ -139,6 +186,7 @@ html, body {
   font-weight: var(--nameWeight, 800);
   font-size: var(--nameSize, calc(var(--fontSize) * 1.02));
   text-shadow: 0 2px 10px rgba(0,0,0,0.35);
+s
 }
 
 .text {
