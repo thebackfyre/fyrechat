@@ -44,22 +44,23 @@
      - Set --bubbleSkinEnabled: 1 to enable.
      ========================================================================== */
 
-  --bubbleSkinEnabled: 1; /* 0 = off (use normal border), 1 = on (use PNG skin) */
 
-  /* Asset path (relative to fyrechat.css location) */
+  --bubbleSkinEnabled: 1; /* 0=off, 1=on */
   --bubbleSkinUrl: url("./themes/default/bubble-outline.png");
 
-  /* Hex-driven color for the frame */
+  /* Frame tint (works because PNG is white) */
   --bubbleSkinColor: #00AEEF;
 
-  /* Match Krita outline stroke */
+  /* Geometry */
   --bubbleSkinBorderWidth: 10px;
+  --bubbleSkinSlice: 140;       /* start at 140 to reduce “weird border” artifacts */
+  --bubbleSkinRepeat: round;    /* round usually looks cleaner than stretch */
+  
+  /* Background opacity control */
+  --bubbleBgAlpha: 0.35;        /* tweak fast */
+  --bubbleBg: rgba(0,0,0,var(--bubbleBgAlpha));
 
-  /* 9-slice tuning (for your 1600x900 asset, r=110, stroke=10) */
-  --bubbleSkinSlice: 120;
-
-  /* How edges scale */
-  --bubbleSkinRepeat: stretch; /* try: round */
+   
 }
 
 html, body {
@@ -112,24 +113,38 @@ html, body {
   flex-direction: column;
   gap: 6px;
 
-  /* Keep your current padding; adjust later if you want */
-  padding: 12px 14px;
+  /* Padding: slightly larger to account for the frame */
+  padding: 18px 22px;
 
-  /* Default (old) look still exists */
-  border-radius: var(--radius);
+  /* Glass background */
   background: var(--bubbleBg);
-  border: 1px solid var(--bubbleBorder);
   box-shadow: var(--shadow);
 
   backdrop-filter: blur(var(--blur));
   -webkit-backdrop-filter: blur(var(--blur));
 
+  /* IMPORTANT: remove classic border + radius when using border-image */
+  border: none;
+  border-radius: 0;
+
+  /* PNG frame (9-slice) */
+  border-style: solid;
+  border-width: calc(var(--bubbleSkinEnabled) * var(--bubbleSkinBorderWidth));
+  border-color: var(--bubbleSkinColor);
+
+  border-image-source: var(--bubbleSkinUrl);
+  border-image-slice: var(--bubbleSkinSlice);
+  border-image-width: var(--bubbleSkinBorderWidth); /* MUST match border-width */
+  border-image-outset: 0;
+  border-image-repeat: var(--bubbleSkinRepeat);
+
   opacity: 0;
   transform: translateY(12px);
   animation: in var(--enterMs) ease-out forwards;
 
-  overflow: visible; /* FIX: prevents text/shadow from being clipped during rapid chat */
+  overflow: visible; /* keeps shadows/text safe */
 }
+
 
 /* ==========================================================================
    PHASE 1 SKIN OVERRIDE
@@ -215,4 +230,5 @@ s
   margin-right: var(--badgeGap);
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
 }
+
 
