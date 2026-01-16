@@ -1,0 +1,137 @@
+ /* ==========================================================================
+   FYRECHAT – Bubble Foundation (Mask 9-slice Outline)
+   Targets your DOM: #stack > .msg > (.meta + .text)
+   ========================================================================== */
+
+:root{
+  /* Bubble content spacing */
+  --bubblePadX: 10px;
+  --bubblePadY: 11px;
+
+  /* Bubble base */
+  --bubbleBg: rgba(0,0,0,0.58);
+  --bubbleText: rgba(255,255,255,0.95);
+
+  /* Outline system */
+  --outlineEnabled: 1;                /* 1 on, 0 off */
+  --outlineColor: #474c51;            /* hex tint */
+  --outlineBand:15px;                /* outline thickness */
+  --outlineSlice: 200;                 /* must match Krita guides */
+  --outlineImg: url("./themes/default/bubble-outline3.png"); /* adjust if needed */
+
+/* Radii system */
+  --outlineRadius: 45px;   /* visual radius of outline corners */
+  --outlineBand: 13px;     /* already defined */
+  --innerRadius: calc(var(--outlineRadius) - var(--outlineBand));
+
+  
+  /* Optional: stack spacing */
+  --msgGap: 2px;
+}
+
+/* Stack layout (safe defaults; keep if you already have these) */
+/* Stack layout (safe defaults; keep if you already have these) */
+#stack{
+  display: flex;
+  flex-direction: column;     /* normal DOM order */
+  justify-content: flex-end;  /* bottom-align when not full */
+  height: 90vh;              /* fixed viewport in obs */
+  gap: var(--msgGap);
+  overflow: hidden;           /* no scrollbar */
+}
+
+
+/* Message bubble */
+#stack .msg{
+  position: relative;
+
+  padding:
+    calc(var(--bubblePadY) + var(--outlineBand))
+    calc(var(--bubblePadX) + var(--outlineBand));
+
+  background: var(--bubbleBg);
+  background-clip: padding-box;
+
+  color: var(--bubbleText);
+
+  border-radius: var(--innerRadius); /* 🔑 derived */
+  transform: translateZ(0);
+}
+
+
+
+/* Outline overlay (doesn't affect layout) */
+#stack .msg::before{
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+
+  /* paint color */
+  background: var(--outlineColor);
+
+  /* thickness of the ring */
+  padding: var(--outlineBand);
+
+  /* on/off toggle */
+  opacity: clamp(0, var(--outlineEnabled), 1);
+
+  /* 9-slice mask */
+  -webkit-mask-box-image: var(--outlineImg) var(--outlineSlice) fill round;
+          mask-border: var(--outlineImg) var(--outlineSlice) fill round;
+}
+
+/* Keep content above outline overlay */
+#stack .msg > *{
+  position: relative;
+  z-index: 1;
+}
+
+/* Basic structure styling (minimal + robust) */
+#stack .msg .meta{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+#stack .msg .badge{
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+#stack .msg .name{
+  font-weight: 700;
+}
+
+#stack .msg .text{
+  color: var(--bubbleText);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Emotes should align nicely */
+#stack .msg .text .emote{
+  height: 1.2em;
+  width: auto;
+  vertical-align: -0.2em;
+}
+
+/* Hard fallback: if masking unsupported, outline disappears cleanly */
+@supports not (-webkit-mask-box-image: url("x.png") 10 fill stretch){
+  #stack .msg::before{ display:none; }
+}
+html, body{
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* 🔑 removes scrollbar */
+}
+
+
+
+
+

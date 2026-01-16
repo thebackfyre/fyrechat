@@ -1,0 +1,451 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0" />
+  <title>Chat Widget (Styled Default)</title>
+  <style>
+    :root{
+      --pad: 18px;
+      --gap: 10px;
+      --maxWidth: 560px;
+
+      --fontSize: 18px;
+      --lineHeight: 1.28;
+
+      --bubbleBg: rgba(0,0,0,0.58);
+      --bubbleBorder: rgba(255,255,255,0.10);
+      --textColor: rgba(255,255,255,0.95);
+
+      --radius: 16px;
+      --blur: 10px;
+      --shadow: 0 12px 34px rgba(0,0,0,0.35);
+
+      --enterMs: 200ms;
+      --exitMs: 260ms;
+      --exitShift: 10px;
+    }
+
+    html, body {
+      margin:0;
+      width:100%;
+      height:100%;
+      background: transparent;
+      overflow:hidden;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+
+    /* Debug banner (only if debug=1) */
+    #debug {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      padding: 8px 10px;
+      background: rgba(255,0,0,0.80);
+      color: #fff;
+      font-size: 13px;
+      z-index: 99999;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: none;
+      pointer-events: none;
+    }
+
+    #stack {
+      position: fixed;
+      left: var(--pad);
+      right: var(--pad);
+      top: var(--pad);
+      bottom: var(--pad);
+
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end; /* keep newest at the bottom */
+      gap: var(--gap);
+
+      max-width: var(--maxWidth);
+
+      overflow: hidden; /* prevents old bubbles from vanishing unpredictably */
+      pointer-events: none;
+    }
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+
+      background: var(--bubbleBg);
+      border: 1px solid var(--bubbleBorder);
+      box-shadow: var(--shadow);
+
+      backdrop-filter: blur(var(--blur));
+      -webkit-backdrop-filter: blur(var(--blur));
+
+      opacity: 0;
+      transform: translateY(12px);
+      animation: in var(--enterMs) ease-out forwards;
+
+      /*overflow: hidden; */
+      overflow: visible; /* FIX: prevents text/shadow from being clipped during rapid chat */
+    }
+
+    @keyframes in {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .out {
+      animation: out var(--exitMs) ease-in forwards;
+    }
+
+    @keyframes out {
+      to { opacity: 0; transform: translateY(var(--exitShift)); }
+    }
+
+    .meta {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+      line-height: 1.1;
+    }
+
+    .name {
+      font-weight: 800;
+      font-size: calc(var(--fontSize) * 1.02);
+      text-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    }
+
+    .text {
+      font-weight: 500;
+      font-size: var(--fontSize);
+      line-height: var(--lineHeight);
+      color: var(--textColor);
+      text-shadow: 0 2px 12px rgba(0,0,0,0.35);
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding-bottom: 2px; /* FIX: prevents descenders (g/y/p) from looking clipped */
+
+    }
+
+    .emote {
+      height: 1.25em;
+      vertical-align: -0.25em;
+      margin: 0 2px;
+    }
+
+    /* NEW: badges */
+    .badge{
+      height: 1.15em;
+      width: auto;
+      vertical-align: -0.15em;
+      margin-right: 6px;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
+    }
+  </style>
+</head>
+<body>
+  <div id="debug"></div>
+  <div id="stack"></div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const demo  = params.get("demo") === "1";
+    const debug = params.get("debug") === "1";
+
+    const channel = (params.get("ch") || "alveussanctuary").toLowerCase();
+    const max = clampInt(params.get("max"), 30, 1, 200);
+
+    // Default lifecycle: keeps it tidy
+    const ttlSeconds  = clampInt(params.get("ttl"), 22, 0, 3600);   // 0 = never remove
+    const fadeSeconds = clampFloat(params.get("fade"), 2.0, 0, 30); // fade animation window
+
+    // NEW: Badge proxy (Cloudflare Worker)
+    // example:
+    // badgeProxy=https%3A%2F%2Ftwitch-badge-proxy.thebackfyre.workers.dev
+    const badgeProxy = (params.get("badgeProxy") || "").replace(/\/+$/,""); // trim trailing slashes
+
+    const $debug = document.getElementById("debug");
+    const $stack = document.getElementById("stack");
+
+    if (debug) {
+      $debug.style.display = "block";
+      $debug.textContent = demo
+        ? `DEMO | ch=${channel} | max=${max} | ttl=${ttlSeconds}s | badgeProxy=${badgeProxy || "(off)"}`
+        : `IRC  | ch=${channel} | max=${max} | ttl=${ttlSeconds}s | badgeProxy=${badgeProxy || "(off)"}`;
+    }
+
+    if (demo) runDemo();
+    else connectIrc(channel);
+
+    // ---------------------------
+    // Badge cache + helpers
+    // ---------------------------
+    const badgeCache = {
+      global: null,            // Map("set/version" -> url)
+      channels: new Map(),     // broadcasterId -> Map(...)
+      globalLoaded: false
+    };
+
+    function buildBadgeMap(helixJson) {
+      const map = new Map();
+      const sets = helixJson?.data || [];
+      for (const set of sets) {
+        const setId = set.set_id;
+        for (const v of (set.versions || [])) {
+          map.set(`${setId}/${v.id}`, v.image_url_2x || v.image_url_1x);
+        }
+      }
+      return map;
+    }
+
+    async function ensureBadgesLoaded(broadcasterId) {
+      if (!badgeProxy) return;
+
+      // Global (load once)
+      if (!badgeCache.globalLoaded) {
+        badgeCache.globalLoaded = true;
+        try {
+          const r = await fetch(`${badgeProxy}/badges/global`, { cache: "no-store" });
+          if (r.ok) badgeCache.global = buildBadgeMap(await r.json());
+          else badgeCache.global = new Map();
+        } catch (e) {
+          badgeCache.global = new Map();
+        }
+      }
+
+      // Channel (per broadcaster)
+      if (!broadcasterId) return;
+      if (!badgeCache.channels.has(broadcasterId)) {
+        try {
+          const r = await fetch(`${badgeProxy}/badges/channels/${encodeURIComponent(broadcasterId)}`, { cache: "no-store" });
+          if (r.ok) badgeCache.channels.set(broadcasterId, buildBadgeMap(await r.json()));
+          else badgeCache.channels.set(broadcasterId, new Map());
+        } catch (e) {
+          badgeCache.channels.set(broadcasterId, new Map());
+        }
+      }
+    }
+
+    function parseBadgesTag(badgesTag) {
+      // "moderator/1,subscriber/12" -> ["moderator/1","subscriber/12"]
+      if (!badgesTag) return [];
+      return badgesTag.split(",").map(s => s.trim()).filter(Boolean);
+    }
+
+    function buildBadgesFragment(keys, broadcasterId) {
+      const frag = document.createDocumentFragment();
+      const globalMap = badgeCache.global || new Map();
+      const chanMap = broadcasterId ? (badgeCache.channels.get(broadcasterId) || new Map()) : new Map();
+
+      for (const key of keys) {
+        const url = chanMap.get(key) || globalMap.get(key);
+        if (!url) continue;
+
+        const img = document.createElement("img");
+        img.className = "badge";
+        img.alt = "";
+        img.src = url;
+        frag.appendChild(img);
+      }
+      return frag;
+    }
+
+    // ---------------------------
+    // Demo / IRC
+    // ---------------------------
+    function runDemo() {
+      // Demo can optionally fake badges if you add demoBadges=1
+      const demoBadgesOn = params.get("demoBadges") === "1";
+
+      const samples = [
+        { name:"Fyre", color:"#9bf", text:"Demo mode 👋 badges will only show if demoBadges=1", badges: "broadcaster/1", roomId: "79615025" },
+        { name:"ModUser", color:"#6f6", text:"This line tests multiple bubbles + badge rendering.", badges: "moderator/1,subscriber/12", roomId: "79615025" },
+        { name:"Viewer", color:"#fc6", text:"If badgeProxy is set, live will show real badges.", badges: "subscriber/3", roomId: "79615025" }
+      ];
+
+      let i = 0;
+      setInterval(() => {
+        const s = samples[i++ % samples.length];
+        const badges = demoBadgesOn ? s.badges : "";
+        addMessage(s.name, s.color, [escapeHtml(s.text)], badges, s.roomId);
+      }, 1200);
+    }
+
+    function connectIrc(chan) {
+      const ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+      const anonNick = "justinfan" + Math.floor(Math.random() * 80000 + 1000);
+
+      ws.addEventListener("open", () => {
+        if (debug) $debug.textContent = `Connected ✅ as ${anonNick} (joining #${chan}) | badgeProxy=${badgeProxy || "(off)"}`;
+        ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+        ws.send("PASS SCHMOOPIIE");
+        ws.send("NICK " + anonNick);
+        ws.send("JOIN #" + chan);
+      });
+
+      ws.addEventListener("message", (ev) => {
+        const data = String(ev.data || "");
+        if (data.startsWith("PING")) {
+          ws.send("PONG :tmi.twitch.tv");
+          return;
+        }
+        const lines = data.split("\r\n").filter(Boolean);
+        for (const line of lines) {
+          if (!line.includes(" PRIVMSG #")) continue;
+          const parsed = parsePrivmsg(line);
+          if (parsed) addMessage(parsed.name, parsed.color, parsed.htmlParts, parsed.badges, parsed.roomId);
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        if (debug) $debug.textContent = "Disconnected — retrying in 2s…";
+        setTimeout(() => connectIrc(chan), 2000);
+      });
+
+      ws.addEventListener("error", () => {
+        if (debug) $debug.textContent = "WebSocket error (network/CSP).";
+      });
+    }
+
+    function parsePrivmsg(line) {
+      let tags = {};
+      let rest = line;
+
+      if (rest.startsWith("@")) {
+        const spaceIdx = rest.indexOf(" ");
+        const rawTags = rest.slice(1, spaceIdx);
+        tags = parseTags(rawTags);
+        rest = rest.slice(spaceIdx + 1);
+      }
+
+      const msgIdx = rest.indexOf(" :");
+      if (msgIdx === -1) return null;
+
+      const text = rest.slice(msgIdx + 2);
+      const name = tags["display-name"] || "Unknown";
+      const color = tags["color"] || "#ffffff";
+      const emotes = tags["emotes"] || "";
+
+      // NEW: badges + room-id (broadcaster id)
+      const badges = tags["badges"] || "";
+      const roomId  = tags["room-id"] || "";
+
+      const htmlParts = buildMessageHtmlParts(text, emotes);
+
+      return { name, color, htmlParts, badges, roomId };
+    }
+
+    function parseTags(raw) {
+      const out = {};
+      for (const p of raw.split(";")) {
+        const eq = p.indexOf("=");
+        const k = eq === -1 ? p : p.slice(0, eq);
+        const v = eq === -1 ? "" : p.slice(eq + 1);
+        out[k] = v;
+      }
+      return out;
+    }
+
+    function buildMessageHtmlParts(text, emotesTag) {
+      if (!emotesTag) return [escapeHtml(text)];
+
+      const ranges = [];
+      for (const def of emotesTag.split("/").filter(Boolean)) {
+        const [id, locs] = def.split(":");
+        if (!id || !locs) continue;
+        for (const loc of locs.split(",")) {
+          const [startStr, endStr] = loc.split("-");
+          const start = Number(startStr), end = Number(endStr);
+          if (Number.isFinite(start) && Number.isFinite(end)) ranges.push({ start, end, id });
+        }
+      }
+      if (!ranges.length) return [escapeHtml(text)];
+      ranges.sort((a,b) => a.start - b.start);
+
+      const parts = [];
+      let cursor = 0;
+      for (const r of ranges) {
+        if (r.start > cursor) parts.push(escapeHtml(text.slice(cursor, r.start)));
+        parts.push(`<img class="emote" alt="" src="https://static-cdn.jtvnw.net/emoticons/v2/${r.id}/default/dark/1.0">`);
+        cursor = r.end + 1;
+      }
+      if (cursor < text.length) parts.push(escapeHtml(text.slice(cursor)));
+      return parts;
+    }
+
+    // NEW: async to allow badge fetch before render
+    async function addMessage(name, color, htmlParts, badgesTag, roomId) {
+      const el = document.createElement("div");
+      el.className = "msg";
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+
+      // Badges (if configured)
+      const badgeKeys = parseBadgesTag(badgesTag);
+      if (badgeProxy && roomId && badgeKeys.length) {
+        await ensureBadgesLoaded(roomId);
+        meta.appendChild(buildBadgesFragment(badgeKeys, roomId));
+      }
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "name";
+      nameEl.textContent = name;
+      nameEl.style.color = color || "#fff";
+
+      const textEl = document.createElement("div");
+      textEl.className = "text";
+      textEl.innerHTML = htmlParts.join("");
+
+      meta.appendChild(nameEl);
+      el.appendChild(meta);
+      el.appendChild(textEl);
+
+      $stack.appendChild(el);
+
+      // Keep list tight
+      while ($stack.children.length > max) $stack.removeChild($stack.firstChild);
+
+      // TTL removal
+      if (ttlSeconds > 0) {
+        const removeAtMs = ttlSeconds * 1000;
+        const fadeMs = Math.max(0, fadeSeconds * 1000);
+
+        // Start fade near the end
+        if (fadeMs > 0 && removeAtMs > fadeMs) {
+          setTimeout(() => el.classList.add("out"), removeAtMs - fadeMs);
+          setTimeout(() => el.remove(), removeAtMs);
+        } else {
+          setTimeout(() => el.remove(), removeAtMs);
+        }
+      }
+    }
+
+    // ---------------------------
+    // Utils
+    // ---------------------------
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    function clampInt(value, fallback, min, max) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      const i = Math.floor(n);
+      return Math.max(min, Math.min(max, i));
+    }
+    function clampFloat(value, fallback, min, max) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.max(min, Math.min(max, n));
+    }
+  </script>
+</body>
+</html>

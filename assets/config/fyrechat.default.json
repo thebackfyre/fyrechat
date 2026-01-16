@@ -1,0 +1,35 @@
+{
+  "channel": "alveussanctuary",
+  "max": 8,
+  "ttl": 22,
+  "fade": 2,
+  "debug": false,
+
+  "badgeProxy": "https://twitch-badge-proxy.thebackfyre.workers.dev",
+  "idProxy": "https://twitch-badge-proxy.thebackfyre.workers.dev",
+
+
+  "demo": false,
+  "demoBadges": false,
+
+  "theme": "glass",
+
+  "emotes": {
+    "enabled": true,
+  "providers": {
+    "bttv": { "enabled": true },
+    "7tv": { "enabled": true, "baseUrl": "https://api.7tv.app/v3" },
+    "ffz": { "enabled": true, "baseUrl": "https://api.frankerfacez.com/v1" }
+      },
+  "style": {
+  "badgeSize": "1.15em",
+  "badgeGap": "6px",
+  "badgePadRight": "6px",
+  "emoteSize": "1.25em",
+  "emoteBaseline": "-0.25em",
+  "emotePadX": "2px"
+      }
+
+    },
+    "cacheMinutes": 360
+  }
